@@ -26,8 +26,6 @@ This project reimagines technical interviews by simulating a real-world experien
    npm run dev
    ```
 
-```
-
 ## Roadmap
 
 - Add more coding problems and interview scenarios.
