@@ -1,11 +1,45 @@
-# while unemployed:
+# while unemployed
 
-This project is a new way of interviewing, The idea is that our program works similar to leetcode with a database of problems. 
-The difference in our product is building something that focuses on making the interview experience more authentic. 
+## Overview
 
-This means our product gives you the option to turn your mic and camera on. Then with a chatbot as your interviewer, 
-you will be asked to explain your solution and asked follow up questions like it is a real interview. 
-At the end you can download the recording of your interview and get feedback on not just getting the solution right, but posture, explanations, and 
-additional insights. 
+This project reimagines technical interviews by simulating a real-world experience. Unlike platforms like LeetCode, our application offers a database of coding problems and integrates authentic interview dynamics.
 
-Updates will be made over time!
+## Key Features
+
+- **Realistic Interview Simulation:** Turn on your mic and camera to interact with a chatbot interviewer.
+- **Interactive Problem Solving:** Explain your solutions and respond to follow-up questions, just like in a live interview.
+- **Performance Recording:** Download a video of your interview session for review.
+- **Comprehensive Feedback:** Receive insights on your solution, communication, posture, and more.
+
+## Getting Started
+
+1. Clone the repository.
+2. Install dependencies:  
+
+   ```bash
+   npm install
+   ```
+
+3. Start the development server:  
+
+   ```bash
+   npm run dev
+   ```
+
+```
+
+```markdown path=/Users/lbrevoort/Desktop/projects/while_unemployed/README.md start_line=18 end_line=36
+## Roadmap
+
+- Add more coding problems and interview scenarios.
+- Enhance feedback with AI-driven analysis.
+- Integrate additional video and audio features.
+- Improve UI/UX for a seamless interview experience.
+
+## Contributing
+
+Contributions are welcome! Please open issues or submit pull requests for improvements.
+
+---
+
+_Updates will be made over time!
