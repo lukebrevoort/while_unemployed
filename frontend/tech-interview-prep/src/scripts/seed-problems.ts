@@ -6,14 +6,21 @@ import { resolve } from 'path'
 dotenv.config({ path: resolve(__dirname, '../../.env.local') })
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY! // ← Use service key
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing Supabase environment variables!')
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('❌ Missing Supabase environment variables!')
+  console.error('Make sure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in .env.local')
   process.exit(1)
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey)
+// Create admin client with service role key (bypasses RLS)
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+})
 
 const sampleProblems = [
   {
@@ -196,17 +203,21 @@ async function seedProblems() {
       .select('title')
 
     if (checkError) {
+      console.error('❌ Error checking existing problems:', checkError)
       throw checkError
     }
 
     if (existingProblems && existingProblems.length > 0) {
-      console.log('⚠️  Problems already exist in database.')
-      console.log(`Found ${existingProblems.length} existing problems.`)
-      console.log('\nDo you want to continue? This will add duplicate problems.')
+      console.log(`⚠️  Found ${existingProblems.length} existing problems in database.`)
+      console.log('\nExisting problems:')
+      existingProblems.forEach((p, i) => console.log(`  ${i + 1}. ${p.title}`))
+      console.log('\n❓ Do you want to add more problems anyway?')
       console.log('Press Ctrl+C to cancel, or wait 5 seconds to continue...\n')
 
       await new Promise(resolve => setTimeout(resolve, 5000))
     }
+
+    console.log('📝 Inserting problems...')
 
     // Insert problems
     const { data, error } = await supabase
@@ -215,20 +226,21 @@ async function seedProblems() {
       .select()
 
     if (error) {
+      console.error('❌ Error inserting problems:', error)
       throw error
     }
 
-    console.log('✅ Successfully seeded problems!\n')
+    console.log('\n✅ Successfully seeded problems!\n')
     console.log(`Added ${data?.length || 0} problems:`)
     data?.forEach((problem, index) => {
       console.log(`  ${index + 1}. ${problem.title} (${problem.difficulty})`)
     })
 
     console.log('\n🎉 Seeding complete!')
+    console.log('Run your app and navigate to /problems to see them!\n')
   } catch (error) {
-    console.error('❌ Error seeding problems:', error)
+    console.error('❌ Seeding failed:', error)
     process.exit(1)
   }
 }
-
 seedProblems()

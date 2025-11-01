@@ -30,41 +30,38 @@ export default function SignupPage() {
       return
     }
 
+    if (!username.trim()) {
+      setError('Username is required')
+      return
+    }
+
     setLoading(true)
 
     try {
-      // Sign up user
+      // Sign up user with username in metadata
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
-            username,
+            username: username.trim(), // Store in user metadata
           },
         },
       })
 
       if (signUpError) throw signUpError
 
-      // Create user profile
       if (data.user) {
-        const { error: profileError } = await supabase
-          .from('user_profiles')
-          .insert([
-            {
-              id: data.user.id,
-              username,
-            },
-          ])
+        // The database trigger will automatically create the profile!
+        // No need to manually insert into user_profiles
 
-        if (profileError) console.error('Profile creation error:', profileError)
+        // Redirect to problems page
+        router.push('/problems')
+        router.refresh()
       }
-
-      // Redirect to login or problems page
-      router.push('/problems')
-      router.refresh()
     } catch (error: any) {
       setError(error.message)
+      console.error('Signup error:', error)
     } finally {
       setLoading(false)
     }
@@ -85,7 +82,7 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-200 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
