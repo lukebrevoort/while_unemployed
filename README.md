@@ -28,7 +28,6 @@ This project reimagines technical interviews by simulating a real-world experien
 
 ```
 
-```markdown path=/Users/lbrevoort/Desktop/projects/while_unemployed/README.md start_line=18 end_line=36
 ## Roadmap
 
 - Add more coding problems and interview scenarios.
