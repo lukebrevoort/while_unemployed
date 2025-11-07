@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react'
 import Editor from '@monaco-editor/react'
-import { Camera, CameraOff, Mic, MicOff, Play, Square, Upload } from 'lucide-react'
-import { useInterviewStore } from '@/lib/store/interviewStore'
+import { Camera, CameraOff, Mic, MicOff, Play, Square, Send, Loader2 } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
 
 interface Problem {
   id: string
@@ -14,31 +14,46 @@ interface Problem {
   test_cases: Array<{ input: string; expected: string; hidden: boolean }>
 }
 
-interface InterviewInterfaceProps {
-  problem: Problem
-  userId: string
+interface Message {
+  role: 'user' | 'assistant'
+  content: string
 }
 
-export default function InterviewInterface({ problem, userId }: InterviewInterfaceProps) {
+export default function InterviewInterface({ problem, userId }: { problem: Problem; userId: string }) {
   const [language, setLanguage] = useState<'python' | 'javascript'>('python')
   const [code, setCode] = useState(problem.starter_code?.python || '')
   const [isRecording, setIsRecording] = useState(false)
   const [isCameraOn, setIsCameraOn] = useState(false)
   const [isMicOn, setIsMicOn] = useState(false)
   const [output, setOutput] = useState('')
+  const [sessionId, setSessionId] = useState<string | null>(null)
 
+  // AI Chat state
+  const [messages, setMessages] = useState<Message[]>([])
+  const [inputMessage, setInputMessage] = useState('')
+  const [isAiTyping, setIsAiTyping] = useState(false)
+  const chatEndRef = useRef<HTMLDivElement>(null)
+
+  // Recording refs
   const videoRef = useRef<HTMLVideoElement>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const recordedChunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
 
-  // Load starter code when language changes
+  const supabase = createClient()
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  // Load starter code
   useEffect(() => {
     const starterCode = problem.starter_code?.[language] || ''
     setCode(starterCode)
   }, [language, problem])
 
-  // Start camera/microphone
+  // Start media stream
   const startMedia = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -54,13 +69,12 @@ export default function InterviewInterface({ problem, userId }: InterviewInterfa
 
       return stream
     } catch (error) {
-      console.error('Error accessing media devices:', error)
-      alert('Could not access camera/microphone. Please check permissions.')
+      console.error('Error accessing media:', error)
+      alert('Could not access camera/microphone')
       return null
     }
   }
 
-  // Stop media stream
   const stopMedia = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop())
@@ -71,121 +85,205 @@ export default function InterviewInterface({ problem, userId }: InterviewInterfa
     }
   }
 
-  // Toggle camera
   const toggleCamera = async () => {
     if (isCameraOn) {
-      // Turn off camera
       if (streamRef.current) {
         const videoTrack = streamRef.current.getVideoTracks()[0]
         if (videoTrack) videoTrack.stop()
       }
       setIsCameraOn(false)
     } else {
-      // Turn on camera
       setIsCameraOn(true)
       if (isMicOn || isRecording) {
-        // Restart stream with video
         stopMedia()
+        await startMedia()
+      } else {
         await startMedia()
       }
     }
   }
 
-  // Toggle microphone
   const toggleMic = async () => {
     if (isMicOn) {
-      // Turn off mic
       if (streamRef.current) {
         const audioTrack = streamRef.current.getAudioTracks()[0]
         if (audioTrack) audioTrack.stop()
       }
       setIsMicOn(false)
     } else {
-      // Turn on mic
       setIsMicOn(true)
       if (isCameraOn || isRecording) {
-        // Restart stream with audio
         stopMedia()
+        await startMedia()
+      } else {
         await startMedia()
       }
     }
   }
 
-  // Start recording
-  const startRecording = async () => {
+  // Start interview
+  const startInterview = async () => {
     if (!isCameraOn && !isMicOn) {
-      alert('Please enable camera or microphone to start recording')
+      alert('Please enable camera or microphone first')
       return
     }
 
-    const stream = await startMedia()
-    if (!stream) return
+    try {
+      // Create session
+      const response = await fetch('/api/interviews/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ problemId: problem.id }),
+      })
+      const { session } = await response.json()
+      setSessionId(session.id)
 
-    recordedChunksRef.current = []
+      // Start recording
+      const stream = await startMedia()
+      if (!stream) return
 
-    const options = { mimeType: 'video/webm;codecs=vp9,opus' }
-    const mediaRecorder = new MediaRecorder(stream, options)
+      recordedChunksRef.current = []
 
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        recordedChunksRef.current.push(event.data)
+      const options = { mimeType: 'video/webm;codecs=vp9,opus' }
+      const mediaRecorder = new MediaRecorder(stream, options)
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunksRef.current.push(event.data)
+        }
       }
-    }
 
-    mediaRecorder.onstop = async () => {
-      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' })
-      await saveRecording(blob)
-    }
+      mediaRecorder.start()
+      mediaRecorderRef.current = mediaRecorder
+      setIsRecording(true)
 
-    mediaRecorder.start()
-    mediaRecorderRef.current = mediaRecorder
-    setIsRecording(true)
+      // Send initial AI message
+      const initialMessage: Message = {
+        role: 'assistant',
+        content: `Hi! I'm your interviewer today. Let's work on "${problem.title}". Can you start by explaining your initial approach to this problem?`,
+      }
+      setMessages([initialMessage])
+    } catch (error) {
+      console.error('Start interview error:', error)
+      alert('Failed to start interview')
+    }
   }
 
-  // Stop recording
-  const stopRecording = () => {
+  // Stop interview
+  const stopInterview = async () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop()
+
+      // Wait for final data
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' })
+      await saveRecording(blob)
+
       setIsRecording(false)
+      stopMedia()
     }
   }
 
   // Save recording to Supabase Storage
   const saveRecording = async (blob: Blob) => {
     try {
-      const fileName = `${userId}/${problem.id}/${Date.now()}.webm`
+      if (!sessionId) {
+        console.error('No session ID')
+        return null
+      }
 
-      // We'll implement this in the next step with Supabase Storage
-      console.log('Recording saved:', blob.size, 'bytes')
-      alert('Recording saved! (Storage integration coming next)')
+      const fileName = `${userId}/${problem.id}/${sessionId}.webm`
 
-      // Download locally for now
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `interview-${problem.id}-${Date.now()}.webm`
-      a.click()
-      URL.revokeObjectURL(url)
+      const { data, error } = await supabase.storage
+        .from('interview-recordings')
+        .upload(fileName, blob, {
+          contentType: 'video/webm',
+          upsert: true,
+        })
+
+      if (error) throw error
+
+      // Get public URL (for display purposes - still private bucket)
+      const { data: urlData } = supabase.storage
+        .from('interview-recordings')
+        .getPublicUrl(fileName)
+
+      const videoUrl = urlData.publicUrl
+
+      // Update session with video URL and code
+      await fetch(`/api/interviews/${sessionId}/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code,
+          language,
+          videoUrl,
+        }),
+      })
+
+      alert('Interview submitted successfully!')
+      return videoUrl
     } catch (error) {
-      console.error('Error saving recording:', error)
+      console.error('Save recording error:', error)
+      alert('Failed to save recording')
+      return null
     }
   }
 
-  // Run code (placeholder for now)
+  // Send message to AI
+  const sendMessage = async () => {
+    if (!inputMessage.trim() || isAiTyping) return
+
+    const userMessage: Message = {
+      role: 'user',
+      content: inputMessage,
+    }
+
+    setMessages(prev => [...prev, userMessage])
+    setInputMessage('')
+    setIsAiTyping(true)
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...messages, userMessage],
+          problemTitle: problem.title,
+          problemDescription: problem.description,
+          code,
+        }),
+      })
+
+      const { message } = await response.json()
+
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: message,
+      }
+
+      setMessages(prev => [...prev, assistantMessage])
+    } catch (error) {
+      console.error('Chat error:', error)
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: 'Sorry, I encountered an error. Please try again.',
+        },
+      ])
+    } finally {
+      setIsAiTyping(false)
+    }
+  }
+
+  // Run code (placeholder)
   const runCode = () => {
-    setOutput('Code execution coming in next phase...\n\nYour code:\n' + code)
+    setOutput('Code execution coming soon...\n\nYour code:\n' + code)
   }
 
-  // Submit code
-  const submitCode = async () => {
-    stopRecording()
-    stopMedia()
-
-    // We'll implement full submission logic later
-    alert('Interview submitted! (Full implementation coming next)')
-  }
-
-  // Cleanup on unmount
+  // Cleanup
   useEffect(() => {
     return () => {
       stopMedia()
@@ -201,10 +299,10 @@ export default function InterviewInterface({ problem, userId }: InterviewInterfa
             <h1 className="text-2xl font-bold text-gray-900">{problem.title}</h1>
             <span
               className={`px-3 py-1 rounded-full text-sm font-medium ${problem.difficulty === 'Easy'
-                ? 'bg-green-100 text-green-800'
-                : problem.difficulty === 'Medium'
-                  ? 'bg-yellow-100 text-yellow-800'
-                  : 'bg-red-100 text-red-800'
+                  ? 'bg-green-100 text-green-800'
+                  : problem.difficulty === 'Medium'
+                    ? 'bg-yellow-100 text-yellow-800'
+                    : 'bg-red-100 text-red-800'
                 }`}
             >
               {problem.difficulty}
@@ -218,19 +316,20 @@ export default function InterviewInterface({ problem, userId }: InterviewInterfa
           </div>
 
           {/* Test Cases */}
-          <div className="mt-6 text-black">
-            <h3 className="text-lg font-semibold mb-3">Test Cases</h3>
+          <div className="mt-6">
+            <h3 className="text-lg font-semibold mb-3 text-gray-900">Test Cases</h3>
             {problem.test_cases?.map((testCase, idx) => (
-              <div key={idx} className="mb-4 p-4 bg-green-100 rounded-lg">
+              <div key={idx} className="mb-4 p-4 bg-green-50 rounded-lg border border-green-200">
                 <div className="mb-2">
-                  <span className="font-medium text-black">Input:</span>
-                  <code className="ml-2 text-sm bg-green-200 px-2 py-1 rounded">
+                  <span className="font-medium text-gray-900">Input:</span>
+                  <code className="ml-2 text-sm bg-green-100 px-2 py-1 rounded text-gray-800">
                     {testCase.input}
                   </code>
                 </div>
                 <div>
-                  <span className="font-medium text-gray-700">Expected:</span>
-                  <code className="ml-2 text-sm bg-green-200 px-2 py-1 rounded"> {testCase.expected}
+                  <span className="font-medium text-gray-900">Expected:</span>
+                  <code className="ml-2 text-sm bg-green-100 px-2 py-1 rounded text-gray-800">
+                    {testCase.expected}
                   </code>
                 </div>
               </div>
@@ -239,43 +338,41 @@ export default function InterviewInterface({ problem, userId }: InterviewInterfa
         </div>
       </div>
 
-      {/* Right Panel - Code Editor & Video */}
+      {/* Middle Panel - Code Editor */}
       <div className="flex-1 flex flex-col">
-        {/* Video Preview */}
-
         {/* Language Selector */}
         <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
           <div className="flex gap-2">
             <button
               onClick={() => setLanguage('python')}
-              className={`px-4 py-1 rounded ${language === 'python'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-700 text-gray-300'
+              className={`px-3 py-1 rounded text-sm ${language === 'python'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300'
                 }`}
             >
               Python
             </button>
             <button
               onClick={() => setLanguage('javascript')}
-              className={`px-4 py-1 rounded ${language === 'javascript'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-700 text-gray-300'
+              className={`px-3 py-1 rounded text-sm ${language === 'javascript'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300'
                 }`}
             >
               JavaScript
             </button>
           </div>
-
           <div className="flex gap-2">
             <button
               onClick={runCode}
-              className="px-4 py-1 bg-green-600 hover:bg-green-700 text-white rounded"
+              className="px-4 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-sm"
             >
               Run Code
             </button>
             <button
-              onClick={submitCode}
-              className="px-4 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded"
+              onClick={stopInterview}
+              disabled={!isRecording}
+              className="px-4 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm disabled:bg-gray-600 disabled:cursor-not-allowed"
             >
               Submit
             </button>
@@ -308,72 +405,137 @@ export default function InterviewInterface({ problem, userId }: InterviewInterfa
           </div>
         </div>
       </div>
+
+      {/* Right Panel - AI Chat */}
+      <div className="w-1/4 border-l border-gray-200 flex flex-col bg-white">
+        <div className="p-4 border-b border-gray-200 bg-blue-50">
+          <h3 className="font-semibold text-gray-900">AI Interviewer</h3>
+          <p className="text-xs text-gray-600 mt-1">
+            {isRecording ? 'Interview in progress' : 'Start interview to begin chat'}
+          </p>
+        </div>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {messages.map((msg, idx) => (
+            <div
+              key={idx}
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div
+                className={`max-w-[80%] p-3 rounded-lg text-sm ${msg.role === 'user'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-900'
+                  }`}
+              >
+                {msg.content}
+              </div>
+            </div>
+          ))}
+          {isAiTyping && (
+            <div className="flex justify-start">
+              <div className="bg-gray-100 p-3 rounded-lg">
+                <Loader2 className="animate-spin" size={16} />
+              </div>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+
+        {/* Input */}
+        <div className="p-4 border-t border-gray-200">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+              placeholder={isRecording ? 'Type your response...' : 'Start interview first'}
+              disabled={!isRecording || isAiTyping}
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 text-gray-900"
+            />
+            <button
+              onClick={sendMessage}
+              disabled={!isRecording || !inputMessage.trim() || isAiTyping}
+              className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              <Send size={18} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Floating Camera Panel - Bottom Right */}
       <div
-        style={{
-          position: 'fixed',
-          bottom: '24px',
-          right: '24px',
-          zIndex: 1000,
-          background: 'rgba(30,41,59,0.95)',
-          borderRadius: '16px',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
-          padding: '16px',
-          width: '320px',
-        }}
-        className="flex flex-col items-center"
+        className="fixed bottom-6 right-6 bg-gray-800 rounded-2xl shadow-2xl p-4 z-50"
+        style={{ width: '320px' }}
       >
+        {/* Video Preview */}
         {isCameraOn ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            muted
-            playsInline
-            className="w-full h-40 object-cover rounded-lg mb-2"
-            style={{ transform: 'scaleX(-1)' }}
-          />
+          <div className="relative">
+            <video
+              ref={videoRef}
+              autoPlay
+              muted
+              playsInline
+              className="w-full h-48 object-cover rounded-lg mb-3"
+              style={{ transform: 'scaleX(-1)' }}
+            />
+            {isRecording && (
+              <div className="absolute top-2 right-2 flex items-center gap-2 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-semibold">
+                <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                REC
+              </div>
+            )}
+          </div>
         ) : (
-          <div className="w-full h-40 flex items-center justify-center text-gray-500 bg-gray-800 rounded-lg mb-2">
-            <CameraOff size={48} />
+          <div className="w-full h-48 flex items-center justify-center bg-gray-900 rounded-lg mb-3">
+            <CameraOff size={48} className="text-gray-600" />
           </div>
         )}
+
         {/* Controls */}
-        <div className="flex gap-2 mt-2">
+        <div className="flex items-center justify-center gap-2">
           <button
             onClick={toggleCamera}
-            className={`p-3 rounded-full ${isCameraOn ? 'bg-blue-600' : 'bg-gray-700'
-              } text-white hover:opacity-80 transition`}
+            className={`p-3 rounded-full transition ${isCameraOn ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-700 hover:bg-gray-600'
+              } text-white`}
+            title={isCameraOn ? 'Turn off camera' : 'Turn on camera'}
           >
             {isCameraOn ? <Camera size={20} /> : <CameraOff size={20} />}
           </button>
+
           <button
             onClick={toggleMic}
-            className={`p-3 rounded-full ${isMicOn ? 'bg-blue-600' : 'bg-gray-700'
-              } text-white hover:opacity-80 transition`}
+            className={`p-3 rounded-full transition ${isMicOn ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-700 hover:bg-gray-600'
+              } text-white`}
+            title={isMicOn ? 'Turn off microphone' : 'Turn on microphone'}
           >
             {isMicOn ? <Mic size={20} /> : <MicOff size={20} />}
           </button>
+
           <button
-            onClick={isRecording ? stopRecording : startRecording}
-            className={`px-6 py-3 rounded-full font-medium ${isRecording
-              ? 'bg-red-600 hover:bg-red-700 animate-pulse'
-              : 'bg-green-600 hover:bg-green-700'
-              } text-white transition`}
+            onClick={isRecording ? stopInterview : startInterview}
+            disabled={!isCameraOn && !isMicOn && !isRecording}
+            className={`px-6 py-3 rounded-full font-medium text-white transition flex items-center gap-2 ${isRecording
+                ? 'bg-red-600 hover:bg-red-700 animate-pulse'
+                : 'bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed'
+              }`}
           >
             {isRecording ? (
               <>
-                <Square size={16} className="inline mr-2" />
+                <Square size={16} />
                 Stop
               </>
             ) : (
               <>
-                <Play size={16} className="inline mr-2" />
-                Record
+                <Play size={16} />
+                Start
               </>
             )}
           </button>
         </div>
       </div>
-
     </div>
   )
 }
