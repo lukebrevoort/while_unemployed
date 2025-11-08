@@ -3,10 +3,12 @@ import { createClient } from '@/lib/supabase/server'
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     const supabase = await createClient()
+    const { params } = context;
+    const { id } = await params;
     const { data: { user } } = await supabase.auth.getUser()
 
     if (!user) {
@@ -25,7 +27,7 @@ export async function POST(
         ended_at: new Date().toISOString(),
         status: 'completed',
       })
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', user.id) // Security: ensure user owns this session
       .select()
       .single()
