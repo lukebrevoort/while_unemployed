@@ -5,6 +5,7 @@ import Editor from '@monaco-editor/react'
 import { Camera, CameraOff, Mic, MicOff, Play, Square, Send, Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from '@headlessui/react'
+import { motion, AnimatePresence } from 'framer-motion'
 
 interface Problem {
   id: string
@@ -35,6 +36,7 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
   const [isAiTyping, setIsAiTyping] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const [liveTranscript, setLiveTranscript] = useState('')
 
   // Recording refs
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -172,10 +174,10 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
         }
 
         recorder.start()
-        // Capture ~30 seconds per chunk to reduce API calls
+        // Capture ~10 seconds per chunk to reduce API calls
         setTimeout(() => {
           if (recorder.state !== 'inactive') recorder.stop()
-        }, 30000)
+        }, 10000)
       }
 
       // kick off the loop
@@ -298,6 +300,7 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
 
     // Append with a space if needed
     pendingTranscriptRef.current = `${pendingTranscriptRef.current} ${text}`.trim()
+    setLiveTranscript(pendingTranscriptRef.current) // <-- update live transcript
 
     const now = Date.now()
     const shouldFlushByTime = now - lastChatSentAtRef.current > 10000 // 10s
@@ -307,6 +310,7 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
     if (shouldFlushByTime || shouldFlushBySize || endPunct) {
       // Fire and forget; don't block the recorder loop
       flushTranscriptToChat()
+      setLiveTranscript('') // <-- clear live transcript after flush
     }
   }
 
@@ -565,8 +569,7 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
                 </div>
 
                 <div className="prose prose-sm max-w-none">
-                  <div className="whitespace-pre-wrap text-gray-700">
-                    {problem.description}
+                  <div className="whitespace-pre-wrap text-gray-700"> {problem.description}
                   </div>
                 </div>
 
@@ -623,21 +626,44 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
                         <p className="text-xs mt-2">Enable your camera/mic and click Start to begin!</p>
                       </div>
                     ) : (
-                      messages.map((msg, idx) => (
-                        <div
-                          key={idx}
-                          className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                        >
-                          <div
-                            className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm ${msg.role === 'user'
-                              ? 'bg-blue-600 text-white rounded-br-none'
-                              : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
-                              }`}
+                      <AnimatePresence initial={false}>
+                        {messages.map((msg, idx) => (
+                          <motion.div
+                            key={idx}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            transition={{ duration: 0.2 }}
+                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                           >
-                            {msg.content}
-                          </div>
-                        </div>
-                      ))
+                            <div
+                              className={`max-w-[85%] p-3 rounded-lg text-sm shadow-sm ${msg.role === 'user'
+                                ? 'bg-blue-600 text-white rounded-br-none'
+                                : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
+                                }`}
+                            >
+                              {msg.content}
+                            </div>
+                          </motion.div>
+                        ))}
+                        {/* Live transcript as a user message */}
+                        {liveTranscript && (
+                          <motion.div
+                            key="live-transcript"
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            transition={{ duration: 0.2 }}
+                            className="flex justify-end"
+                          >
+                            <div className="max-w-[85%] p-3 rounded-lg text-sm shadow-sm bg-blue-400 text-white rounded-br-none opacity-80">
+                              <span className="animate-pulse">{liveTranscript}</span>
+                            </div>
+                          </motion.div>
+                        )}
+
+                      </AnimatePresence>
+
                     )}
                     {isAiTyping && (
                       <div className="flex justify-start">
