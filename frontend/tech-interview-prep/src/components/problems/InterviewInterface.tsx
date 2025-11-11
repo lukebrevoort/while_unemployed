@@ -6,6 +6,7 @@ import { Camera, CameraOff, Mic, MicOff, Play, Square, Send, Loader2 } from 'luc
 import { createClient } from '@/lib/supabase/client'
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from '@headlessui/react'
 import { motion, AnimatePresence } from 'framer-motion'
+import useSocket from '../../../hooks/useSocket'
 
 interface Problem {
   id: string
@@ -37,6 +38,7 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
   const [isListening, setIsListening] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const [liveTranscript, setLiveTranscript] = useState('')
+  const socketRef = useSocket('http://localhost:8000')
 
   // Recording refs
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -241,6 +243,16 @@ export default function InterviewInterface({ problem, userId }: { problem: Probl
   }
   const getAIResponse = async (conversationMessages: Message[]) => {
     setIsAiTyping(true)
+    // Emit to Socket.IO backend
+
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('ai_message', {
+        messages: conversationMessages,
+        problemTitle: problem.title,
+        problemDescription: problem.description,
+        code,
+      });
+    }
 
     try {
       const response = await fetch('/api/chat', {
