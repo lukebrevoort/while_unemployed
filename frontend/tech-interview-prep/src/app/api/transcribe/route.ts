@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { toFile } from 'openai/uploads'
 import OpenAI from 'openai'
 
 export const runtime = 'nodejs'
@@ -33,13 +32,38 @@ export async function POST(request: NextRequest) {
 
     console.log('Blob type:', audioBlob.type, 'size:', audioBlob.size)
 
-    // Ensure a clean MIME type without codec params so OpenAI can infer the container
-    const baseType = (audioBlob.type || 'audio/webm').split(';')[0]
-    const ab = await audioBlob.arrayBuffer()
-    const cleanBlob = new Blob([ab], { type: baseType })
-    const ext = baseType.includes('ogg') ? 'ogg' : baseType.includes('mp4') ? 'mp4' : baseType.includes('wav') ? 'wav' : baseType.includes('mpeg') || baseType.includes('mp3') ? 'mp3' : baseType.includes('webm') ? 'webm' : 'webm'
-    const file = await toFile(cleanBlob, `audio.${ext}`)
-    console.log('File:', file.name, file.type, file.size)
+    // Convert to File with proper extension based on mime type
+    const arrayBuffer = await audioBlob.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+    
+    // Determine file extension from mime type
+    let extension = 'webm';
+    let mimeType = audioBlob.type || 'audio/webm';
+    
+    if (mimeType.includes('mp4')) {
+      extension = 'mp4';
+      mimeType = 'audio/mp4';
+    } else if (mimeType.includes('mpeg') || mimeType.includes('mp3')) {
+      extension = 'mp3';
+      mimeType = 'audio/mpeg';
+    } else if (mimeType.includes('ogg')) {
+      extension = 'ogg';
+      mimeType = 'audio/ogg';
+    } else if (mimeType.includes('wav')) {
+      extension = 'wav';
+      mimeType = 'audio/wav';
+    } else {
+      // Default to webm
+      extension = 'webm';
+      mimeType = 'audio/webm';
+    }
+    
+    // Create a File object with proper mime type and extension
+    const file = new File([buffer], `audio.${extension}`, { 
+      type: mimeType,
+    })
+    
+    console.log('File:', file.name, file.size)
 
     // Transcribe with Whisper
     const transcription = await openai.audio.transcriptions.create({

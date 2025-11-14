@@ -1,2 +1,2 @@
 from dataclasses import dataclass
-from langchain.tools import tool, ToolRuntime
+from langchain.tools import tool

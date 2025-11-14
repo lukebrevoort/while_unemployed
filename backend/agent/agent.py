@@ -1,10 +1,7 @@
 from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor
 from langchain.agents import create_agent
-from langchain.tools import Tool
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.memory import ConversationBufferMemory
-from typing import List, Optional, Dict, Any
+from langchain_core.tools import tool
+from typing import List, Optional, Dict, Any, Annotated
 from enum import Enum
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -63,144 +60,181 @@ class InterviewState(BaseModel):
 
 
 # ============================================
-# AGENT TOOLS
+# GLOBAL STATE HOLDER
+# ============================================
+# This is a simple way to pass state to tools
+# In production, consider using a more robust state management solution
+_current_state: Optional[InterviewState] = None
+
+
+def set_current_state(state: InterviewState):
+    """Set the current interview state for tool access"""
+    global _current_state
+    _current_state = state
+
+
+def get_current_state() -> InterviewState:
+    """Get the current interview state"""
+    global _current_state
+    if _current_state is None:
+        raise RuntimeError("Interview state not initialized")
+    return _current_state
+
+
+# ============================================
+# AGENT TOOLS (using @tool decorator)
 # ============================================
 
 
-class InterviewerTools:
-    """Tools the agent can use to analyze and make decisions"""
+@tool
+def analyze_user_state(transcription: str) -> str:
+    """Analyze the user's current state from their speech.
+    Use this when you receive new transcription to understand if the user is struggling, confident, or stuck.
 
-    def __init__(self, state: InterviewState):
-        self.state = state
+    Args:
+        transcription: The text transcription of what the user said
+    """
+    state = get_current_state()
+    lower_text = transcription.lower()
 
-    def analyze_user_state(self, transcription: str) -> str:
-        """Analyze the user's current state from their speech"""
-        lower_text = transcription.lower()
+    # Detect struggle signals
+    struggle_keywords = ["stuck", "not sure", "don't know", "confused", "hmm", "uh"]
+    is_struggling = any(keyword in lower_text for keyword in struggle_keywords)
 
-        # Detect struggle signals
-        struggle_keywords = ["stuck", "not sure", "don't know", "confused", "hmm", "uh"]
-        is_struggling = any(keyword in lower_text for keyword in struggle_keywords)
+    # Detect confidence
+    confident_keywords = ["i think", "definitely", "so we can", "the approach is"]
+    is_confident = any(keyword in lower_text for keyword in confident_keywords)
 
-        # Detect confidence
-        confident_keywords = ["i think", "definitely", "so we can", "the approach is"]
-        is_confident = any(keyword in lower_text for keyword in confident_keywords)
+    # Detect completion phrases
+    completion_keywords = ["done", "finished", "that's it", "does that make sense"]
+    is_complete = any(keyword in lower_text for keyword in completion_keywords)
 
-        # Detect completion phrases
-        completion_keywords = ["done", "finished", "that's it", "does that make sense"]
-        is_complete = any(keyword in lower_text for keyword in completion_keywords)
+    analysis = {
+        "is_struggling": is_struggling,
+        "is_confident": is_confident,
+        "is_complete": is_complete,
+        "text_length": len(transcription.split()),
+    }
 
-        analysis = {
-            "is_struggling": is_struggling,
-            "is_confident": is_confident,
-            "is_complete": is_complete,
-            "text_length": len(transcription.split()),
-        }
+    # Update state
+    if is_struggling:
+        state.user_focus = UserFocus.STUCK
+        state.confidence_level = max(0.2, state.confidence_level - 0.1)
+    elif is_confident:
+        state.confidence_level = min(1.0, state.confidence_level + 0.1)
 
-        # Update state
-        if is_struggling:
-            self.state.user_focus = UserFocus.STUCK
-            self.state.confidence_level = max(0.2, self.state.confidence_level - 0.1)
-        elif is_confident:
-            self.state.confidence_level = min(1.0, self.state.confidence_level + 0.1)
+    return f"User state analysis: {analysis}"
 
-        return f"User state analysis: {analysis}"
 
-    def check_problem_coverage(self, transcription: str) -> str:
-        """Check what parts of the problem have been covered"""
-        lower_text = transcription.lower()
+@tool
+def check_problem_coverage(transcription: str) -> str:
+    """Check what parts of the problem the user has covered so far.
+    Use this to understand what aspects still need to be discussed.
 
-        # Check for approach explanation
-        if any(
-            word in lower_text
-            for word in ["approach", "algorithm", "solution", "method"]
-        ):
-            self.state.coverage.approach_explained = True
+    Args:
+        transcription: The text transcription of what the user said
+    """
+    state = get_current_state()
+    lower_text = transcription.lower()
 
-        # Check for edge cases
-        if any(
-            word in lower_text
-            for word in ["edge case", "empty", "null", "zero", "negative"]
-        ):
-            self.state.coverage.edge_cases_discussed = True
+    # Check for approach explanation
+    if any(
+        word in lower_text for word in ["approach", "algorithm", "solution", "method"]
+    ):
+        state.coverage.approach_explained = True
 
-        # Check for complexity
-        if any(
-            word in lower_text
-            for word in ["time complexity", "o(n)", "space complexity", "runtime"]
-        ):
-            self.state.coverage.complexity_analyzed = True
+    # Check for edge cases
+    if any(
+        word in lower_text
+        for word in ["edge case", "empty", "null", "zero", "negative"]
+    ):
+        state.coverage.edge_cases_discussed = True
 
-        # Check for implementation mentions
-        if any(
-            word in lower_text for word in ["implement", "code", "write", "function"]
-        ):
-            self.state.coverage.implementation_started = True
+    # Check for complexity
+    if any(
+        word in lower_text
+        for word in ["time complexity", "o(n)", "space complexity", "runtime"]
+    ):
+        state.coverage.complexity_analyzed = True
 
-        coverage_summary = {
-            "approach": self.state.coverage.approach_explained,
-            "edge_cases": self.state.coverage.edge_cases_discussed,
-            "complexity": self.state.coverage.complexity_analyzed,
-            "implementation": self.state.coverage.implementation_started,
-        }
+    # Check for implementation mentions
+    if any(word in lower_text for word in ["implement", "code", "write", "function"]):
+        state.coverage.implementation_started = True
 
-        return f"Problem coverage: {coverage_summary}"
+    coverage_summary = {
+        "approach": state.coverage.approach_explained,
+        "edge_cases": state.coverage.edge_cases_discussed,
+        "complexity": state.coverage.complexity_analyzed,
+        "implementation": state.coverage.implementation_started,
+    }
 
-    def should_intervene(self, silence_duration: float) -> str:
-        """Decide if the AI should speak now"""
-        reasons = []
+    return f"Problem coverage: {coverage_summary}"
 
-        # Check silence
-        if silence_duration > 5.0:
-            reasons.append("User has been silent for over 5 seconds")
 
-        # Check if stuck
-        if self.state.user_focus == UserFocus.STUCK:
-            reasons.append("User appears to be stuck")
+@tool
+def should_intervene(silence_duration: float) -> str:
+    """Decide if you should speak now based on silence duration and interview state.
+    Use this to determine whether to respond or keep listening.
 
-        # Check time since last AI response
-        if self.state.last_ai_response:
-            time_since_response = (
-                datetime.now() - self.state.last_ai_response
-            ).total_seconds()
-            if time_since_response > 120:  # 2 minutes
-                reasons.append("Haven't spoken in 2 minutes")
+    Args:
+        silence_duration: How long the user has been silent in seconds
+    """
+    state = get_current_state()
+    reasons = []
 
-        # Check if coverage is incomplete after significant time
-        elapsed = (datetime.now() - self.state.start_time).total_seconds()
-        if elapsed > 300 and not self.state.coverage.approach_explained:  # 5 minutes
-            reasons.append("5 minutes passed but approach not explained")
+    # Check silence
+    if silence_duration > 5.0:
+        reasons.append("User has been silent for over 5 seconds")
 
-        # Cooldown - don't speak too frequently
-        if self.state.last_ai_response:
-            time_since_response = (
-                datetime.now() - self.state.last_ai_response
-            ).total_seconds()
-            if time_since_response < 30:  # Don't speak within 30 seconds
-                return f"Should NOT intervene: Too soon since last response ({time_since_response:.1f}s ago)"
+    # Check if stuck
+    if state.user_focus == UserFocus.STUCK:
+        reasons.append("User appears to be stuck")
 
-        if reasons:
-            return f"Should INTERVENE: {', '.join(reasons)}"
-        else:
-            return "Should NOT intervene: User is progressing well, keep listening"
+    # Check time since last AI response
+    if state.last_ai_response:
+        time_since_response = (datetime.now() - state.last_ai_response).total_seconds()
+        if time_since_response > 120:  # 2 minutes
+            reasons.append("Haven't spoken in 2 minutes")
 
-    def get_interview_context(self) -> str:
-        """Get current interview context summary"""
-        elapsed = (datetime.now() - self.state.start_time).total_seconds()
+    # Check if coverage is incomplete after significant time
+    elapsed = (datetime.now() - state.start_time).total_seconds()
+    if elapsed > 300 and not state.coverage.approach_explained:  # 5 minutes
+        reasons.append("5 minutes passed but approach not explained")
 
-        context = {
-            "time_elapsed": f"{elapsed // 60:.0f}m {elapsed % 60:.0f}s",
-            "hints_given": self.state.hints_given,
-            "questions_asked": len(self.state.questions_asked),
-            "confidence_level": f"{self.state.confidence_level * 100:.0f}%",
-            "user_focus": self.state.user_focus.value,
-            "coverage": {
-                "approach": self.state.coverage.approach_explained,
-                "edge_cases": self.state.coverage.edge_cases_discussed,
-                "complexity": self.state.coverage.complexity_analyzed,
-            },
-        }
+    # Cooldown - don't speak too frequently
+    if state.last_ai_response:
+        time_since_response = (datetime.now() - state.last_ai_response).total_seconds()
+        if time_since_response < 30:  # Don't speak within 30 seconds
+            return f"Should NOT intervene: Too soon since last response ({time_since_response:.1f}s ago)"
 
-        return f"Interview context: {context}"
+    if reasons:
+        return f"Should INTERVENE: {', '.join(reasons)}"
+    else:
+        return "Should NOT intervene: User is progressing well, keep listening"
+
+
+@tool
+def get_interview_context() -> str:
+    """Get a summary of the current interview state including time elapsed,
+    hints given, coverage, and confidence level. Use this to understand the overall progress.
+    """
+    state = get_current_state()
+    elapsed = (datetime.now() - state.start_time).total_seconds()
+
+    context = {
+        "time_elapsed": f"{elapsed // 60:.0f}m {elapsed % 60:.0f}s",
+        "hints_given": state.hints_given,
+        "questions_asked": len(state.questions_asked),
+        "confidence_level": f"{state.confidence_level * 100:.0f}%",
+        "user_focus": state.user_focus.value,
+        "coverage": {
+            "approach": state.coverage.approach_explained,
+            "edge_cases": state.coverage.edge_cases_discussed,
+            "complexity": state.coverage.complexity_analyzed,
+        },
+    }
+
+    return f"Interview context: {context}"
 
 
 # ============================================
@@ -211,7 +245,7 @@ class InterviewerTools:
 def create_interviewer_agent(
     problem_title: str, problem_description: str, problem_id: str
 ):
-    """Create the interviewer agent with tools and memory"""
+    """Create the interviewer agent using modern LangChain v1+ API"""
 
     # Initialize state
     state = InterviewState(
@@ -220,35 +254,19 @@ def create_interviewer_agent(
         problem_description=problem_description,
     )
 
-    # Initialize tools
-    tools_helper = InterviewerTools(state)
+    # Set global state for tool access
+    set_current_state(state)
 
     # Define tools for the agent
     tools = [
-        Tool(
-            name="analyze_user_state",
-            func=tools_helper.analyze_user_state,
-            description="Analyze the user's current emotional and cognitive state from their speech. Use this when you receive new transcription.",
-        ),
-        Tool(
-            name="check_problem_coverage",
-            func=tools_helper.check_problem_coverage,
-            description="Check what aspects of the problem the user has covered (approach, edge cases, complexity, implementation).",
-        ),
-        Tool(
-            name="should_intervene",
-            func=lambda silence: tools_helper.should_intervene(float(silence)),
-            description="Decide if you should speak now based on silence duration and interview state. Input: silence duration in seconds.",
-        ),
-        Tool(
-            name="get_interview_context",
-            func=tools_helper.get_interview_context,
-            description="Get a summary of the current interview state (time, hints given, coverage, etc.).",
-        ),
+        analyze_user_state,
+        check_problem_coverage,
+        should_intervene,
+        get_interview_context,
     ]
 
-    # Create the prompt
-    system_message = f"""You are an experienced technical interviewer conducting a coding interview for: "{problem_title}"
+    # Create system prompt
+    system_prompt = f"""You are an experienced technical interviewer conducting a coding interview for: "{problem_title}"
 
 Problem Description:
 {problem_description}
@@ -284,39 +302,20 @@ Decision Process:
 Remember: Quality over quantity. It's better to listen more and speak less strategically.
 """
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", system_message),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ]
-    )
-
     # Initialize LLM
     llm = ChatOpenAI(
         model="gpt-4o-mini",
         temperature=0.7,
     )
-    # Create agent
 
-    agent = create_agent(llm, tools=tools)
-    # Create memory
-    memory = ConversationBufferMemory(
-        memory_key="chat_history", return_messages=True, output_key="output"
-    )
-
-    # Create agent executor
-    agent_executor = AgentExecutor(
-        agent=agent,
+    # Create agent using LangGraph's create_react_agent
+    agent = create_agent(
+        model=llm,
         tools=tools,
-        memory=memory,
-        verbose=True,
-        max_iterations=3,
-        return_intermediate_steps=True,
+        system_prompt=system_prompt,
     )
 
-    return agent_executor, state
+    return agent, state
 
 
 # ============================================
@@ -325,12 +324,15 @@ Remember: Quality over quantity. It's better to listen more and speak less strat
 
 
 async def process_transcription(
-    agent_executor: AgentExecutor,
+    agent,
     state: InterviewState,
     transcription: str,
     silence_duration: float = 0.0,
 ) -> Dict[str, Any]:
     """Process a transcription and decide if AI should respond"""
+
+    # Update global state
+    set_current_state(state)
 
     # Add to conversation buffer
     state.conversation_buffer.append(
@@ -343,8 +345,8 @@ async def process_transcription(
     state.last_spoke_at = datetime.now()
     state.silence_duration = silence_duration
 
-    # Create input for agent
-    agent_input = f"""
+    # Create input message for agent
+    user_message = f"""
 New transcription from user: "{transcription}"
 
 Silence duration: {silence_duration} seconds
@@ -360,12 +362,30 @@ Instructions:
 Remember: Only speak if necessary. Quality > Quantity.
 """
 
-    # Run agent
-    result = await agent_executor.ainvoke({"input": agent_input})
+    # Build messages list for agent
+    messages = [{"role": "user", "content": user_message}]
+
+    # Run agent (new API returns a dict with 'messages' key)
+    try:
+        result = await agent.ainvoke({"messages": messages})
+
+        # Extract the last message from the agent
+        output_messages = result.get("messages", [])
+        if output_messages:
+            last_message = output_messages[-1]
+            # Get content from the message
+            if hasattr(last_message, "content"):
+                output = last_message.content
+            else:
+                output = str(last_message)
+        else:
+            output = "LISTENING"
+
+    except Exception as e:
+        print(f"Error running agent: {e}")
+        output = "LISTENING"
 
     # Check if agent decided to speak
-    output = result.get("output", "")
-
     should_respond = "LISTENING" not in output.upper()
 
     if should_respond:
@@ -388,5 +408,4 @@ Remember: Only speak if necessary. Quality > Quantity.
         "should_respond": should_respond,
         "response": output if should_respond else None,
         "state": state,
-        "reasoning": result.get("intermediate_steps", []),
     }

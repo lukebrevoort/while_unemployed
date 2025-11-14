@@ -51,13 +51,13 @@ async def init_interview(sid, data):
     problem_id = data.get("problem_id")
 
     # Create agent
-    agent_executor, state = create_interviewer_agent(
+    agent, state = create_interviewer_agent(
         problem_title=problem_title,
         problem_description=problem_description,
         problem_id=problem_id,
     )
 
-    active_sessions[sid] = (agent_executor, state)
+    active_sessions[sid] = (agent, state)
 
     # Send initial message
     initial_message = (
@@ -78,7 +78,7 @@ async def transcription(sid, data):
         print(f"Session not initialized: {sid}")
         return
 
-    agent_executor, state = active_sessions[sid]
+    agent, state = active_sessions[sid]
 
     transcription_text = data.get("content", "")
     silence_duration = data.get("silence_duration", 0.0)
@@ -91,7 +91,7 @@ async def transcription(sid, data):
 
     # Process with agent
     result = await process_transcription(
-        agent_executor=agent_executor,
+        agent=agent,
         state=state,
         transcription=transcription_text,
         silence_duration=silence_duration,

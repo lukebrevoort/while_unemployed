@@ -69,6 +69,7 @@ export default function InterviewInterface({
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSpeechTimeRef = useRef<number>(Date.now());
   const [silenceDuration, setSilenceDuration] = useState(0);
+  const audioMimeTypeRef = useRef<string>("audio/webm");
 
   const supabase = createClient();
 
@@ -220,10 +221,31 @@ export default function InterviewInterface({
     try {
       const audioStream = new MediaStream(stream.getAudioTracks());
 
-      let mimeType = "audio/webm;codecs=opus";
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = "audio/webm";
+      // Try different mime types in order of preference for OpenAI Whisper
+      let mimeType = "";
+      const preferredTypes = [
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/webm;codecs=opus",
+        "audio/webm",
+      ];
+      
+      for (const type of preferredTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          break;
+        }
       }
+      
+      if (!mimeType) {
+        console.error("No supported audio format found");
+        return;
+      }
+      
+      console.log("Using audio format:", mimeType);
+      audioMimeTypeRef.current = mimeType;
 
       const audioRecorder = new MediaRecorder(audioStream, { mimeType });
       audioChunksRef.current = [];
@@ -231,15 +253,35 @@ export default function InterviewInterface({
       audioRecorder.ondataavailable = async (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
-
-          // Send audio chunk for transcription every 3 seconds
-          if (audioChunksRef.current.length >= 3) {
-            await transcribeAudioChunk();
-          }
         }
       };
 
-      audioRecorder.start(1000);
+      audioRecorder.onstop = async () => {
+        // Process when stopped
+        if (audioChunksRef.current.length > 0) {
+          await transcribeAudioChunk();
+        }
+      };
+
+      // Start recording with timeslice - this creates complete chunks with headers
+      audioRecorder.start();
+      
+      // Stop and restart every 3 seconds to get complete audio files with headers
+      const restartInterval = setInterval(() => {
+        if (audioRecorderRef.current && audioRecorderRef.current.state === 'recording') {
+          audioRecorderRef.current.stop();
+          // Small delay then restart
+          setTimeout(() => {
+            if (audioRecorderRef.current) {
+              audioRecorderRef.current.start();
+            }
+          }, 100);
+        }
+      }, 10000);
+
+      // Store interval reference for cleanup
+      (audioRecorder as any).restartInterval = restartInterval;
+
       audioRecorderRef.current = audioRecorder;
       setIsListening(true);
     } catch (error) {
@@ -252,10 +294,19 @@ export default function InterviewInterface({
     if (audioChunksRef.current.length === 0) return;
 
     try {
+      // Create a complete audio blob from all accumulated chunks
       const audioBlob = new Blob(audioChunksRef.current, {
-        type: "audio/webm",
+        type: audioMimeTypeRef.current,
       });
+      
+      // Clear chunks after creating blob
       audioChunksRef.current = [];
+
+      // Skip very small audio files (likely silence or incomplete)
+      if (audioBlob.size < 10000) {
+        console.log("Skipping small audio chunk:", audioBlob.size);
+        return;
+      }
 
       const formData = new FormData();
       formData.append("audio", audioBlob, "audio.webm");
@@ -354,6 +405,11 @@ export default function InterviewInterface({
   const stopInterview = async () => {
     // Stop audio transcription
     if (audioRecorderRef.current) {
+      // Clear restart interval
+      const restartInterval = (audioRecorderRef.current as any).restartInterval;
+      if (restartInterval) {
+        clearInterval(restartInterval);
+      }
       audioRecorderRef.current.stop();
       audioRecorderRef.current = null;
     }
@@ -451,6 +507,10 @@ export default function InterviewInterface({
     return () => {
       stopMedia();
       if (audioRecorderRef.current) {
+        const restartInterval = (audioRecorderRef.current as any).restartInterval;
+        if (restartInterval) {
+          clearInterval(restartInterval);
+        }
         audioRecorderRef.current.stop();
       }
     };
