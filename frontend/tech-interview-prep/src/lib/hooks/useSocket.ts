@@ -7,6 +7,26 @@ interface Message {
   timestamp?: string;
 }
 
+interface InterviewFeedback {
+  overall_grade: string;
+  overall_score: number;
+  stages_completed: number;
+  total_time_minutes: number;
+  hints_used: number;
+  confidence_level: number;
+  stage_grades: Record<string, {
+    stage_name: string;
+    score: number;
+    strengths: string[];
+    areas_for_improvement: string[];
+    completed: boolean;
+  }>;
+  key_strengths: string[];
+  key_improvements: string[];
+  next_steps: string[];
+  difficulty_recommendation: string;
+}
+
 interface UseInterviewWebSocketProps {
   sessionId: string;
   problemTitle: string;
@@ -14,6 +34,7 @@ interface UseInterviewWebSocketProps {
   problemId: string;
   onAIResponse: (message: string) => void;
   onTranscriptionEcho: (message: string) => void;
+  onInterviewEnded?: (feedback: InterviewFeedback | null) => void;
 }
 
 export function useInterviewWebSocket({
@@ -23,6 +44,7 @@ export function useInterviewWebSocket({
   problemId,
   onAIResponse,
   onTranscriptionEcho,
+  onInterviewEnded,
 }: UseInterviewWebSocketProps) {
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
@@ -72,6 +94,13 @@ export function useInterviewWebSocket({
       onTranscriptionEcho(data.content);
     });
 
+    socket.on("interview_ended", (data: { content: string; feedback: InterviewFeedback | null }) => {
+      console.log("Interview ended:", data);
+      if (onInterviewEnded) {
+        onInterviewEnded(data.feedback);
+      }
+    });
+
     socket.on("error", (error: Error) => {
       console.error("WebSocket error:", error);
     });
@@ -86,6 +115,7 @@ export function useInterviewWebSocket({
     problemId,
     onAIResponse,
     onTranscriptionEcho,
+    onInterviewEnded,
   ]);
 
   const sendTranscription = (text: string, silenceDuration: number = 0) => {
@@ -118,3 +148,5 @@ export function useInterviewWebSocket({
     endInterview,
   };
 }
+
+export type { InterviewFeedback };

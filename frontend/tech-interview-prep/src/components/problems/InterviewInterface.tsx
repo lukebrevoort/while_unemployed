@@ -13,10 +13,15 @@ import {
   Loader2,
   Wifi,
   WifiOff,
+  X,
+  Award,
+  TrendingUp,
+  Target,
+  CheckCircle2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/react";
-import { useInterviewWebSocket } from "@/lib/hooks/useSocket";
+import { useInterviewWebSocket, InterviewFeedback } from "@/lib/hooks/useSocket";
 
 interface Problem {
   id: string;
@@ -49,6 +54,10 @@ export default function InterviewInterface({
   const [isMicOn, setIsMicOn] = useState(false);
   const [output, setOutput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
+
+  // Feedback state
+  const [interviewFeedback, setInterviewFeedback] = useState<InterviewFeedback | null>(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
   // AI Chat state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -103,6 +112,14 @@ export default function InterviewInterface({
     console.log("Transcription confirmed:", message);
   }, []);
 
+  const handleInterviewEnded = useCallback((feedback: InterviewFeedback | null) => {
+    console.log("Interview ended with feedback:", feedback);
+    if (feedback) {
+      setInterviewFeedback(feedback);
+      setShowFeedbackModal(true);
+    }
+  }, []);
+
   const {
     isConnected,
     sendTranscription,
@@ -115,6 +132,7 @@ export default function InterviewInterface({
     problemId: problem.id,
     onAIResponse: handleAIResponse,
     onTranscriptionEcho: handleTranscriptionEcho,
+    onInterviewEnded: handleInterviewEnded,
   });
 
   // Auto-scroll chat
@@ -331,9 +349,9 @@ export default function InterviewInterface({
         console.log("Stopping recorder for final chunk processing...");
         pushToTalkAudioRecorderRef.current.stop();
         
-        // Wait longer for final transcription to complete
+        // Wait longer for final transcription to complete (increased from 2s to 3s)
         console.log("Waiting for final transcription to process...");
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
 
       pushToTalkAudioRecorderRef.current = null;
@@ -1146,6 +1164,235 @@ export default function InterviewInterface({
           </button>
         </div>
       </div>
+
+      {/* Feedback Modal */}
+      {showFeedbackModal && interviewFeedback && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="sticky top-0 bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <Award size={40} className="text-yellow-300" />
+                  <div>
+                    <h2 className="text-3xl font-bold">Interview Complete!</h2>
+                    <p className="text-blue-100">Here's your performance feedback</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowFeedbackModal(false)}
+                  className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 transition"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {/* Overall Grade */}
+              <div className="mt-6 bg-white bg-opacity-20 rounded-xl p-6 backdrop-blur">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-blue-100 text-sm">Overall Grade</p>
+                    <p className="text-6xl font-bold text-white">
+                      {interviewFeedback.overall_grade}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-blue-100 text-sm">Score</p>
+                    <p className="text-4xl font-bold text-white">
+                      {interviewFeedback.overall_score.toFixed(1)}%
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-blue-100 text-xs">Time</p>
+                    <p className="text-lg font-semibold">
+                      {interviewFeedback.total_time_minutes.toFixed(1)} min
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-blue-100 text-xs">Stages</p>
+                    <p className="text-lg font-semibold">
+                      {interviewFeedback.stages_completed}/4
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-blue-100 text-xs">Hints Used</p>
+                    <p className="text-lg font-semibold">
+                      {interviewFeedback.hints_used}/3
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-6">
+              {/* Stage Breakdown */}
+              <div>
+                <div className="flex items-center gap-2 mb-4">
+                  <TrendingUp className="text-blue-600" size={24} />
+                  <h3 className="text-xl font-bold text-gray-900">Stage Breakdown</h3>
+                </div>
+                <div className="space-y-4">
+                  {Object.entries(interviewFeedback.stage_grades).map(([key, grade]) => (
+                    <div
+                      key={key}
+                      className={`border-2 rounded-xl p-4 ${
+                        grade.completed
+                          ? "border-green-200 bg-green-50"
+                          : "border-gray-200 bg-gray-50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          {grade.completed ? (
+                            <CheckCircle2 className="text-green-600" size={20} />
+                          ) : (
+                            <div className="w-5 h-5 border-2 border-gray-400 rounded-full" />
+                          )}
+                          <h4 className="font-semibold text-gray-900">{grade.stage_name}</h4>
+                        </div>
+                        <span className="text-lg font-bold text-gray-900">
+                          {grade.score.toFixed(0)}%
+                        </span>
+                      </div>
+                      
+                      {/* Progress Bar */}
+                      <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
+                        <div
+                          className={`h-2 rounded-full ${
+                            grade.score >= 80
+                              ? "bg-green-600"
+                              : grade.score >= 60
+                              ? "bg-yellow-500"
+                              : "bg-red-500"
+                          }`}
+                          style={{ width: `${grade.score}%` }}
+                        />
+                      </div>
+
+                      {grade.strengths.length > 0 && (
+                        <div className="mb-2">
+                          <p className="text-xs font-semibold text-green-700 mb-1">
+                            Strengths:
+                          </p>
+                          <ul className="text-sm text-gray-700 space-y-1">
+                            {grade.strengths.map((strength, idx) => (
+                              <li key={idx} className="flex items-start gap-2">
+                                <span className="text-green-600 mt-0.5">✓</span>
+                                <span>{strength}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {grade.areas_for_improvement.length > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-orange-700 mb-1">
+                            Areas for Improvement:
+                          </p>
+                          <ul className="text-sm text-gray-700 space-y-1">
+                            {grade.areas_for_improvement.map((improvement, idx) => (
+                              <li key={idx} className="flex items-start gap-2">
+                                <span className="text-orange-600 mt-0.5">•</span>
+                                <span>{improvement}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Key Strengths */}
+              {interviewFeedback.key_strengths.length > 0 && (
+                <div className="bg-green-50 border-2 border-green-200 rounded-xl p-4">
+                  <h3 className="text-lg font-bold text-green-900 mb-3 flex items-center gap-2">
+                    <CheckCircle2 size={20} />
+                    Key Strengths
+                  </h3>
+                  <ul className="space-y-2">
+                    {interviewFeedback.key_strengths.map((strength, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-gray-700">
+                        <span className="text-green-600 font-bold mt-0.5">✓</span>
+                        <span>{strength}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Key Improvements */}
+              {interviewFeedback.key_improvements.length > 0 && (
+                <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-4">
+                  <h3 className="text-lg font-bold text-orange-900 mb-3 flex items-center gap-2">
+                    <Target size={20} />
+                    Areas to Focus On
+                  </h3>
+                  <ul className="space-y-2">
+                    {interviewFeedback.key_improvements.map((improvement, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-gray-700">
+                        <span className="text-orange-600 font-bold mt-0.5">•</span>
+                        <span>{improvement}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Next Steps */}
+              <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+                <h3 className="text-lg font-bold text-blue-900 mb-3 flex items-center gap-2">
+                  <TrendingUp size={20} />
+                  Next Steps
+                </h3>
+                <ul className="space-y-2">
+                  {interviewFeedback.next_steps.map((step, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-gray-700">
+                      <span className="text-blue-600 font-bold mt-0.5">→</span>
+                      <span>{step}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-4 pt-4 border-t border-blue-200">
+                  <p className="text-sm text-gray-600">
+                    <span className="font-semibold">Recommended Difficulty: </span>
+                    <span
+                      className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        interviewFeedback.difficulty_recommendation === "hard"
+                          ? "bg-red-100 text-red-800"
+                          : interviewFeedback.difficulty_recommendation === "medium"
+                          ? "bg-yellow-100 text-yellow-800"
+                          : "bg-green-100 text-green-800"
+                      }`}
+                    >
+                      {interviewFeedback.difficulty_recommendation.toUpperCase()}
+                    </span>
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="sticky bottom-0 bg-gray-50 p-6 rounded-b-2xl border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowFeedbackModal(false);
+                  // Optionally navigate to problems list
+                  window.location.href = "/problems";
+                }}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition"
+              >
+                Continue to Problems
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
