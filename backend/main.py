@@ -26,6 +26,8 @@ app.add_middleware(
 
 # Store active sessions
 active_sessions: Dict[str, tuple] = {}
+# Store ongoing transcription buffers for each session
+transcription_buffers: Dict[str, list] = {}
 
 
 @sio.event
@@ -39,6 +41,8 @@ async def disconnect(sid):
     print(f"Client disconnected: {sid}")
     if sid in active_sessions:
         del active_sessions[sid]
+    if sid in transcription_buffers:
+        del transcription_buffers[sid]
 
 
 @sio.event
@@ -58,22 +62,15 @@ async def init_interview(sid, data):
     )
 
     active_sessions[sid] = (agent, state)
+    transcription_buffers[sid] = []
 
-    # Send initial message
-    initial_message = (
-        f"Hi! Let's work on {problem_title}. "
-        f"Take a moment to read the problem, and when you're ready, "
-        f"start by explaining your initial approach."
-    )
-
-    await sio.emit(
-        "ai_response", {"content": initial_message, "should_tts": True}, room=sid
-    )
+    # Don't send initial message - frontend handles this now
+    print(f"Session {sid} initialized successfully")
 
 
 @sio.event
 async def transcription(sid, data):
-    """Handle transcription from client"""
+    """Handle complete transcription from client after push-to-talk ends"""
     if sid not in active_sessions:
         print(f"Session not initialized: {sid}")
         return
@@ -81,37 +78,49 @@ async def transcription(sid, data):
     agent, state = active_sessions[sid]
 
     transcription_text = data.get("content", "")
-    silence_duration = data.get("silence_duration", 0.0)
-
-    print(f"Transcription from {sid}: {transcription_text[:50]}...")
-
-    # Echo back
-    if transcription_text:
-        await sio.emit("transcription_echo", {"content": transcription_text}, room=sid)
-
-    # Process with agent
-    result = await process_transcription(
-        agent=agent,
-        state=state,
-        transcription=transcription_text,
-        silence_duration=silence_duration,
-    )
-
-    # Send AI response if needed
-    if result["should_respond"]:
-        print(f"AI responding to {sid}: {result['response'][:50]}...")
-
-        await sio.emit(
-            "ai_response",
-            {
-                "content": result["response"],
-                "should_tts": True,
-                "hints_given": state.hints_given,
-                "questions_asked": len(state.questions_asked),
-                "confidence_level": state.confidence_level,
-            },
-            room=sid,
+    
+    # Only process if there's actual text (complete message from user)
+    if transcription_text and transcription_text.strip():
+        print(f"Processing complete message from {sid}: {transcription_text}...")
+        
+        # Process with agent and get response
+        result = await process_transcription(
+            agent=agent,
+            state=state,
+            transcription=transcription_text,
+            silence_duration=0.0,
+            should_respond=True,
         )
+
+        # Send AI response
+        if result["should_respond"]:
+            print(f"AI responding to {sid}: {result['response'][:50]}...")
+
+            await sio.emit(
+                "ai_response",
+                {
+                    "content": result["response"],
+                    "should_tts": True,
+                    "hints_given": state.hints_given,
+                    "questions_asked": len(state.questions_asked),
+                    "confidence_level": state.confidence_level,
+                },
+                room=sid,
+            )
+        else:
+            await sio.emit(
+                "ai_response",
+                {
+                    "content": result["response"],
+                    "should_tts": True,
+                    "hints_given": state.hints_given,
+                    "questions_asked": len(state.questions_asked),
+                    "confidence_level": state.confidence_level,
+                },
+                room=sid,
+            )
+    else:
+        print(f"Received empty message from {sid}, ignoring")
 
 
 @sio.event

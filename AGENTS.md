@@ -21,3 +21,22 @@ This entire project is build on the philosphy of learning by doing. The platform
 - DO NOT create MULTIPLE .md documents for changes, only provide comments in relevant code sections that were changed.
 - Comments should be clear and concise, explaining the purpose and functionality of the code.
 - Code itself sholud be self-explanatory wherever possible as to ease future maintenance.
+
+## Code Architecture
+
+Backend:
+
+- Python 3.10+
+- FastAPI for building APIs and WebSocket endpoints
+- LangChain 1v for building AI agents
+
+Frontend:
+
+- NextJS 13+
+- TypeScript for type safety and improved developer experience
+- JS for scripting and interactivity
+- Tailwind CSS for styling and layout
+
+Database and Authorization:
+
+- Supabase

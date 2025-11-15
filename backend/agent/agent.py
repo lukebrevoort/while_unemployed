@@ -182,9 +182,9 @@ def should_intervene(silence_duration: float) -> str:
     state = get_current_state()
     reasons = []
 
-    # Check silence
-    if silence_duration > 5.0:
-        reasons.append("User has been silent for over 5 seconds")
+    # Check silence - 5 seconds means user finished speaking
+    if silence_duration >= 5.0:
+        reasons.append("User finished speaking (5+ seconds of silence)")
 
     # Check if stuck
     if state.user_focus == UserFocus.STUCK:
@@ -204,7 +204,7 @@ def should_intervene(silence_duration: float) -> str:
     # Cooldown - don't speak too frequently
     if state.last_ai_response:
         time_since_response = (datetime.now() - state.last_ai_response).total_seconds()
-        if time_since_response < 30:  # Don't speak within 30 seconds
+        if time_since_response < 20:  # Don't speak within 20 seconds
             return f"Should NOT intervene: Too soon since last response ({time_since_response:.1f}s ago)"
 
     if reasons:
@@ -261,7 +261,6 @@ def create_interviewer_agent(
     tools = [
         analyze_user_state,
         check_problem_coverage,
-        should_intervene,
         get_interview_context,
     ]
 
@@ -274,38 +273,47 @@ Problem Description:
 Your Role:
 - Guide the candidate through the problem-solving process
 - Ask clarifying questions about their approach
+- Answer their questions clearly and helpfully
 - Provide hints ONLY when the candidate is stuck (limit 3 hints)
 - Evaluate their understanding of time/space complexity
 - Encourage them to consider edge cases
 - Be professional but friendly and supportive
 
 Interview Guidelines:
-1. Let the candidate think and speak - don't interrupt unnecessarily
-2. Ask open-ended questions to understand their thought process
-3. Only intervene when: they're stuck, silent for 5+ seconds, or haven't covered key aspects
-4. Challenge them with follow-up questions if they're doing well
-5. Keep responses concise (2-3 sentences max)
-6. Track what they've covered and guide them to uncovered areas
+1. ALWAYS respond when the candidate finishes speaking - they are using push-to-talk
+2. If they ask a question, answer it directly and clearly
+3. If they explain their approach, acknowledge it and ask follow-up questions
+4. If they seem stuck, offer a gentle hint or guiding question
+5. Keep responses concise (1-3 sentences) - have a conversation, not a lecture
+6. Ask open-ended questions to understand their thought process
+7. Challenge them with follow-up questions if they're doing well
+8. Track what they've covered and guide them to uncovered areas
+
+Response Style:
+- SHORT and CONVERSATIONAL (like a real interview)
+- ONE main point per response
+- Ask ONE follow-up question if appropriate
+- Be encouraging and supportive
+- Match their energy level
 
 Tools Available:
 - analyze_user_state: Check if user is struggling, confident, or stuck
 - check_problem_coverage: See what problem aspects they've addressed
-- should_intervene: Determine if you should speak now
 - get_interview_context: Get time elapsed, hints given, etc.
 
-Decision Process:
-1. Use tools to analyze the current situation
-2. Decide: Should I speak or keep listening?
-3. If speaking: What type of response? (Question/Hint/Encouragement/Challenge)
-4. Keep responses SHORT and NATURAL
+Instructions:
+1. Use analyze_user_state to understand how they're feeling
+2. Use check_problem_coverage to see what they've discussed
+3. Provide a helpful, conversational response
+4. NEVER say "LISTENING" or skip responding - always engage with what they said
 
-Remember: Quality over quantity. It's better to listen more and speak less strategically.
+Remember: This is push-to-talk, so when you receive a message, the candidate has finished speaking and is waiting for YOUR response. Always respond!
 """
 
-    # Initialize LLM
+    # Initialize LLM - use gpt-4o-mini for fast responses
     llm = ChatOpenAI(
         model="gpt-4o-mini",
-        temperature=0.7,
+        temperature=0.8,  # Higher temperature for faster, more natural responses
     )
 
     # Create agent using LangGraph's create_react_agent
@@ -328,8 +336,17 @@ async def process_transcription(
     state: InterviewState,
     transcription: str,
     silence_duration: float = 0.0,
+    should_respond: bool = True,
 ) -> Dict[str, Any]:
-    """Process a transcription and decide if AI should respond"""
+    """Process a transcription and decide if AI should respond
+
+    Args:
+        agent: The LangChain agent
+        state: The interview state
+        transcription: User's speech text
+        silence_duration: How long user has been silent
+        should_respond: Whether to actually generate a response (False for accumulation only)
+    """
 
     # Update global state
     set_current_state(state)
@@ -345,21 +362,24 @@ async def process_transcription(
     state.last_spoke_at = datetime.now()
     state.silence_duration = silence_duration
 
+    # If not ready to respond, just update state and return
+    if not should_respond:
+        return {
+            "should_respond": False,
+            "response": None,
+            "state": state,
+        }
+
     # Create input message for agent
     user_message = f"""
-New transcription from user: "{transcription}"
-
-Silence duration: {silence_duration} seconds
+The candidate just said: "{transcription}"
 
 Instructions:
-1. First, use 'analyze_user_state' tool with the transcription
-2. Then use 'check_problem_coverage' tool with the transcription  
-3. Then use 'should_intervene' tool with silence duration
-4. Based on the tool results, decide:
-   - If should intervene: Provide your response (question/hint/encouragement)
-   - If should NOT intervene: Say "LISTENING" (I will keep listening)
+1. Use 'analyze_user_state' to understand their current state
+2. Use 'check_problem_coverage' to see what they've discussed
+3. Provide a helpful, conversational response (1-3 sentences)
 
-Remember: Only speak if necessary. Quality > Quantity.
+Remember: They are waiting for YOUR response. Always respond with something helpful!
 """
 
     # Build messages list for agent
@@ -379,33 +399,30 @@ Remember: Only speak if necessary. Quality > Quantity.
             else:
                 output = str(last_message)
         else:
-            output = "LISTENING"
+            output = "Great! Please continue."
 
     except Exception as e:
         print(f"Error running agent: {e}")
-        output = "LISTENING"
+        output = "I understand. Please continue explaining your approach."
 
-    # Check if agent decided to speak
-    should_respond = "LISTENING" not in output.upper()
+    # Always respond now (no more LISTENING logic)
+    state.last_ai_response = datetime.now()
+    state.conversation_buffer.append(
+        {
+            "role": "assistant",
+            "content": output,
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
 
-    if should_respond:
-        state.last_ai_response = datetime.now()
-        state.conversation_buffer.append(
-            {
-                "role": "assistant",
-                "content": output,
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
-
-        # Track questions/hints
-        if "?" in output:
-            state.questions_asked.append(output)
-        if any(word in output.lower() for word in ["hint", "try", "consider"]):
-            state.hints_given += 1
+    # Track questions/hints
+    if "?" in output:
+        state.questions_asked.append(output)
+    if any(word in output.lower() for word in ["hint", "try", "consider"]):
+        state.hints_given += 1
 
     return {
-        "should_respond": should_respond,
-        "response": output if should_respond else None,
+        "should_respond": True,
+        "response": output,
         "state": state,
     }
