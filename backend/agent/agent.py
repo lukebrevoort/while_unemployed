@@ -370,7 +370,7 @@ async def process_transcription(
             "state": state,
         }
 
-    # Create input message for agent
+    # Create input message for agent with current transcription
     user_message = f"""
 The candidate just said: "{transcription}"
 
@@ -382,8 +382,21 @@ Instructions:
 Remember: They are waiting for YOUR response. Always respond with something helpful!
 """
 
-    # Build messages list for agent
-    messages = [{"role": "user", "content": user_message}]
+    # Build messages list with FULL conversation history
+    # Convert conversation_buffer to the format LangChain expects
+    messages = []
+    
+    # Add all previous messages from conversation history
+    for msg in state.conversation_buffer:
+        messages.append({
+            "role": msg["role"],
+            "content": msg["content"]
+        })
+    
+    # Add the current user message
+    messages.append({"role": "user", "content": user_message})
+    
+    print(f"Sending {len(messages)} messages to agent (full conversation history)")
 
     # Run agent (new API returns a dict with 'messages' key)
     try:

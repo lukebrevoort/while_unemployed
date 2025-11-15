@@ -482,6 +482,8 @@ export default function InterviewInterface({
       console.log("Sending audio blob to transcription API, size:", audioBlob.size);
       const formData = new FormData();
       formData.append("audio", audioBlob, "audio.webm");
+      formData.append("problemTitle", problem.title);
+      formData.append("problemDescription", problem.description);
 
       const response = await fetch("/api/transcribe", {
         method: "POST",
@@ -493,8 +495,16 @@ export default function InterviewInterface({
         return;
       }
 
-      const { text } = await response.json();
+      const { text, wasAutoCorrected, validation } = await response.json();
       console.log("Received transcription:", text);
+      
+      if (wasAutoCorrected) {
+        console.log("Transcription was auto-corrected");
+      }
+      
+      if (validation && validation.confidence < 0.7) {
+        console.warn("Low confidence transcription:", validation.confidence, validation.issues);
+      }
 
       if (text && text.trim().length > 0) {
         console.log("Processing transcription, text:", text);

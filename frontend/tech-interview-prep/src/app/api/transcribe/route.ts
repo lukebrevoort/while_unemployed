@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import OpenAI from 'openai'
+import { correctTranscription, generateWhisperPrompt } from '@/lib/transcription/corrector'
 
 export const runtime = 'nodejs'
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 })
+
+// Store last transcription for context continuity
+let lastTranscriptionCache: Record<string, string> = {}
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,9 +21,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Get audio blob from request
+    // Get audio blob and optional context from request
     const formData = await request.formData()
     const audioBlob = formData.get('audio') as Blob
+    const problemTitle = formData.get('problemTitle') as string | null
+    const problemDescription = formData.get('problemDescription') as string | null
 
     if (!audioBlob) {
       return NextResponse.json({ error: 'No audio provided' }, { status: 400 })
@@ -65,15 +71,47 @@ export async function POST(request: NextRequest) {
     
     console.log('File:', file.name, file.size)
 
-    // Transcribe with Whisper
+    // Get previous transcription for context
+    const userKey = user.id
+    const previousText = lastTranscriptionCache[userKey]
+
+    // Generate context-aware Whisper prompt
+    const whisperPrompt = generateWhisperPrompt({
+      previousText,
+      problemTitle: problemTitle || undefined,
+      problemDescription: problemDescription || undefined,
+    })
+
+    console.log('Whisper prompt:', whisperPrompt)
+
+    // Transcribe with Whisper using context prompt
     const transcription = await openai.audio.transcriptions.create({
       file,
       model: 'whisper-1',
       language: 'en',
+      prompt: whisperPrompt,
     })
 
+    console.log('Raw transcription:', transcription.text)
+
+    // Apply correction pipeline
+    const correctionResult = await correctTranscription(transcription.text, {
+      previousText,
+      problemTitle: problemTitle || undefined,
+      problemDescription: problemDescription || undefined,
+    })
+
+    console.log('Corrected transcription:', correctionResult.correctedText)
+    console.log('Validation:', correctionResult.validation)
+
+    // Update cache with corrected text for next chunk
+    lastTranscriptionCache[userKey] = correctionResult.correctedText
+
     return NextResponse.json({
-      text: transcription.text,
+      text: correctionResult.correctedText,
+      original: correctionResult.originalText,
+      wasAutoCorrected: correctionResult.wasAutoCorrected,
+      validation: correctionResult.validation,
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
