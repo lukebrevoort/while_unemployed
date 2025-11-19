@@ -1,22 +1,22 @@
-import { createClient } from '@/lib/supabase/server'
-import Link from 'next/link'
+import { createClient } from "@/lib/supabase/server";
+import Link from "next/link";
 
 export default async function ProblemsPage() {
-  const supabase = await createClient()
+  const supabase = await createClient();
 
-  const { data: { user } } = await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const { data: problems } = await supabase
-    .from('problems')
-    .select('*')
-    .order('created_at', { ascending: false })
+    .from("problems")
+    .select("*")
+    .order("created_at", { ascending: false });
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">
-          Welcome back!
-        </h1>
+        <h1 className="text-3xl font-bold text-gray-900">Welcome back!</h1>
         <p className="mt-2 text-gray-600">
           Select a problem to start practicing
         </p>
@@ -43,12 +43,13 @@ export default async function ProblemsPage() {
                       </div>
                       <div className="ml-4 flex items-center gap-3">
                         <span
-                          className={`inline-flex items-center px-3 py-0.5 rounded-full text-sm font-medium ${problem.difficulty === 'Easy'
-                              ? 'bg-green-100 text-green-800'
-                              : problem.difficulty === 'Medium'
-                                ? 'bg-yellow-100 text-yellow-800'
-                                : 'bg-red-100 text-red-800'
-                            }`}
+                          className={`inline-flex items-center px-3 py-0.5 rounded-full text-sm font-medium ${
+                            problem.difficulty === "Easy"
+                              ? "bg-green-100 text-green-800"
+                              : problem.difficulty === "Medium"
+                                ? "bg-yellow-100 text-yellow-800"
+                                : "bg-red-100 text-red-800"
+                          }`}
                         >
                           {problem.difficulty}
                         </span>
@@ -79,5 +80,5 @@ export default async function ProblemsPage() {
         )}
       </div>
     </div>
-  )
+  );
 }
