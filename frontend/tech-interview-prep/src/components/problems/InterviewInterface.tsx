@@ -361,7 +361,7 @@ export default function InterviewInterface({
     const finalTranscription = transcriptionBufferRef.current.join(" ");
     console.log("Final complete transcription to send:", finalTranscription);
 
-    // Send the complete message
+    // Send the complete message with current code
     if (finalTranscription.trim()) {
       const userMessage: Message = {
         role: "user",
@@ -376,8 +376,14 @@ export default function InterviewInterface({
       setCurrentTranscription("");
       transcriptionBufferRef.current = [];
 
-      // Send COMPLETE message to backend (not chunks)
+      // Send COMPLETE message AND current code to backend
       console.log("Sending complete message to backend:", finalTranscription);
+      console.log("Sending current code snapshot:", code.length, "characters");
+      
+      // First send the latest code update to ensure state is current
+      sendCodeUpdate(code);
+      
+      // Then send the transcription (agent will have access to updated code)
       sendTranscription(finalTranscription, 0);
 
       // Mark as sent and show AI typing
@@ -973,10 +979,17 @@ export default function InterviewInterface({
                         )}
 
                         {!isPushToTalkActive && !currentTranscription && (
-                          <p className="text-xs text-gray-500 text-center">
-                            Click the button to start speaking to the AI
-                            interviewer
-                          </p>
+                          <div className="text-xs text-gray-500 text-center space-y-1">
+                            <p>
+                              Click the button to start speaking to the AI
+                              interviewer
+                            </p>
+                            {code && code.trim().length > 0 && (
+                              <p className="text-blue-600 font-medium">
+                                💡 Your code will be analyzed when you stop listening
+                              </p>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>

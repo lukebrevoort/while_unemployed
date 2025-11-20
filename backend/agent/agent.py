@@ -344,6 +344,12 @@ def analyze_code_quality() -> str:
     """Analyze the candidate's current code for quality and issues.
     Use this during IMPLEMENTATION stage to see their code and provide feedback.
     No arguments needed - reads from current state.
+    
+    Returns detailed analysis including:
+    - Code structure and completeness
+    - Logic issues
+    - Edge case handling
+    - Code snippet for context
     """
     state = get_current_state()
     code = state.current_code
@@ -353,30 +359,58 @@ def analyze_code_quality() -> str:
     
     issues = []
     suggestions = []
+    strengths = []
     
     lines = code.split('\n')
     
-    # Basic checks
+    # Basic structure checks
     if 'def ' not in code and 'function ' not in code:
         issues.append("No function definition found")
+    else:
+        strengths.append("Has function definition")
     
     if len(lines) < 3:
         suggestions.append("Code seems short - might be incomplete")
+    elif len(lines) > 10:
+        strengths.append(f"Substantial implementation ({len(lines)} lines)")
     
     if 'return' not in code.lower():
         issues.append("Missing return statement")
+    else:
+        strengths.append("Has return statement")
     
     # Edge case handling
     edge_keywords = ['if', 'else', 'null', 'None', 'empty', '== 0', 'len(']
     has_edge_cases = any(kw in code for kw in edge_keywords)
-    if not has_edge_cases:
-        suggestions.append("Consider edge case handling")
+    if has_edge_cases:
+        strengths.append("Includes conditional logic for edge cases")
+    else:
+        suggestions.append("Consider edge case handling (empty input, null, zero)")
+    
+    # Loop detection
+    if any(kw in code for kw in ['for ', 'while ']):
+        strengths.append("Uses loops for iteration")
+    
+    # Data structure usage
+    if any(kw in code for kw in ['dict', 'set', 'hash', 'map', '{}', 'defaultdict']):
+        strengths.append("Uses appropriate data structures")
     
     # Track issues
     if issues:
         state.stage_progress.syntax_issues_count += len(issues)
     
-    return f"Code: {len(lines)} lines. Issues: {issues if issues else 'None'}. Suggestions: {suggestions if suggestions else 'Looks good'}"
+    # Include code preview for context
+    code_preview = code[:300] + "..." if len(code) > 300 else code
+    
+    analysis = {
+        "lines": len(lines),
+        "strengths": strengths if strengths else ["None identified yet"],
+        "issues": issues if issues else ["None"],
+        "suggestions": suggestions if suggestions else ["Looks good so far"],
+        "code_preview": code_preview
+    }
+    
+    return f"Code Analysis: {analysis}"
 
 
 @tool
@@ -914,15 +948,18 @@ WHAT TO OBSERVE (silently track for grading later):
 
 CODE AWARENESS:
 - You receive real-time code updates via WebSocket
-- Use get_interview_context to see code preview
-- Use analyze_code_quality to check their code
-- Only comment on code if they ask or if there's a critical issue
+- ALWAYS use get_interview_context first to see if they have code
+- If they have code (code_lines > 0), use analyze_code_quality to review it
+- When they ask questions or seem stuck, check their code first
+- Provide specific feedback based on what you see in their code
+- Comment on code when: they ask, they're stuck, or they mention being done
 
 WHEN TO SPEAK:
-1. They ask you a question - answer briefly
+1. They ask you a question - answer briefly (check their code first if relevant)
 2. They finish explaining - acknowledge with "Got it" or ask a follow-up
-3. They're stuck - ask "What are you thinking?"
-4. They mention they're done coding - you can ask about testing
+3. They're stuck - use analyze_code_quality to see their code, then help
+4. They mention they're done coding - analyze their code and ask about testing
+5. They ask for hints - check their code to give specific guidance
 
 WHEN TO STAY QUIET:
 - They're actively coding
@@ -1005,9 +1042,13 @@ async def process_transcription(
         }
 
     # Create minimal input message - let agent use tools to get context
-    user_message = f"""Candidate: "{transcription}"
+    code_hint = ""
+    if state.has_written_code and state.current_code:
+        code_hint = f"\n\nCandidate has written {state.code_lines} lines of code. Use analyze_code_quality() to review their code if relevant to their question or if they seem stuck."
+    
+    user_message = f"""Candidate: "{transcription}"{code_hint}
 
-Check conversation history. Use tools to see progress. Respond naturally (1-2 sentences).
+Check conversation history. Use tools to see progress and code. Respond naturally (1-2 sentences).
 Don't repeat questions they already answered."""
 
     # Build messages list with conversation history
