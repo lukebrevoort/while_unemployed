@@ -91,8 +91,44 @@ export default function InterviewInterface({
 
   const supabase = createClient();
 
+  // TTS audio playback
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const playTTSAudio = (audioBase64: string) => {
+    try {
+      // Convert base64 to blob
+      const binaryString = atob(audioBase64);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const audioBlob = new Blob([bytes], { type: "audio/mpeg" });
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Play audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      audio.play().catch((error) => {
+        console.error("Audio playback error:", error);
+      });
+
+      // Cleanup when audio finishes
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+      };
+    } catch (error) {
+      console.error("TTS playback error:", error);
+    }
+  };
+
   // WebSocket connection
-  const handleAIResponse = useCallback((message: string) => {
+  const handleAIResponse = useCallback((message: string, audio?: string) => {
     console.log("Received AI response:", message);
     
     // Display the response immediately
@@ -105,6 +141,11 @@ export default function InterviewInterface({
         timestamp: new Date().toISOString(),
       },
     ]);
+
+    // Play TTS audio if available
+    if (audio) {
+      playTTSAudio(audio);
+    }
   }, []);
 
   const handleTranscriptionEcho = useCallback((message: string) => {
@@ -752,6 +793,11 @@ export default function InterviewInterface({
         if (pushToTalkAudioRecorderRef.current.state !== "inactive") {
           pushToTalkAudioRecorderRef.current.stop();
         }
+      }
+      // Cleanup TTS audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
       }
     };
   }, []);
