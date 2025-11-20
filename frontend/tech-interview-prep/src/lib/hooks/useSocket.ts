@@ -32,7 +32,7 @@ interface UseInterviewWebSocketProps {
   problemTitle: string;
   problemDescription: string;
   problemId: string;
-  onAIResponse: (message: string) => void;
+  onAIResponse: (message: string, audio?: string) => void;
   onTranscriptionEcho: (message: string) => void;
   onInterviewEnded?: (feedback: InterviewFeedback | null) => void;
 }
@@ -78,14 +78,9 @@ export function useInterviewWebSocket({
 
     socket.on(
       "ai_response",
-      (data: { content: string; should_tts: boolean }) => {
+      (data: { content: string; should_tts: boolean; audio?: string }) => {
         console.log("AI response:", data);
-        onAIResponse(data.content);
-
-        // TODO: Implement TTS if should_tts is true
-        if (data.should_tts) {
-          // playTTS(data.content)
-        }
+        onAIResponse(data.content, data.audio);
       },
     );
 
