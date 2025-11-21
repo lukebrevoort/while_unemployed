@@ -52,9 +52,19 @@ export function useInterviewWebSocket({
   useEffect(() => {
     // Connect to WebSocket - use environment variable or fallback to localhost
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+    console.log("Connecting to backend:", backendUrl);
+    
     const socket = io(backendUrl, {
       path: "/socket.io/",
-      transports: ["websocket"],
+      // Try websocket first, fallback to polling if it fails
+      transports: ["websocket", "polling"],
+      // Increase timeout for production
+      timeout: 20000,
+      // Enable reconnection
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: 5,
     });
 
     socketRef.current = socket;

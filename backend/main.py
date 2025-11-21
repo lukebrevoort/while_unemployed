@@ -18,12 +18,22 @@ ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",
 PORT = int(os.getenv("PORT", "8000"))
 HOST = os.getenv("HOST", "0.0.0.0")
 
-# Create Socket.IO server
+# Clean up ALLOWED_ORIGINS (remove trailing slashes and whitespace)
+ALLOWED_ORIGINS = [origin.strip().rstrip('/') for origin in ALLOWED_ORIGINS]
+
+print(f"Configured ALLOWED_ORIGINS: {ALLOWED_ORIGINS}")
+
+# Create Socket.IO server with production-ready settings
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=ALLOWED_ORIGINS,
+    cors_credentials=True,
     logger=True,
     engineio_logger=True,
+    # Allow both polling and websocket for better compatibility
+    allow_upgrades=True,
+    ping_timeout=60,
+    ping_interval=25,
 )
 
 # Create FastAPI app

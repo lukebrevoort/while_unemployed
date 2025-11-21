@@ -28,6 +28,7 @@ services:
     ports:
       - port: 8000
         protocol: http
+        # Koyeb automatically supports WebSocket upgrades on HTTP ports
     
     # Health check
     health_checks:
