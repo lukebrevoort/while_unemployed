@@ -8,9 +8,13 @@ services:
   - name: api
     type: web
     
-    # Docker configuration
-    docker:
-      dockerfile: Dockerfile
+    # Git source configuration
+    git:
+      repository: github.com/lukebrevoort/while_unemployed
+      branch: main
+      builder: dockerfile
+      dockerfile: backend/Dockerfile
+      build_context: backend
     
     # Instance configuration
     instance_type: nano  # Start small, can scale up later
