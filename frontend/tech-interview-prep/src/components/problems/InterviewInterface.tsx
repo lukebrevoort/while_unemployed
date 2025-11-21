@@ -70,6 +70,7 @@ export default function InterviewInterface({
   const [currentTranscription, setCurrentTranscription] = useState("");
   const transcriptionBufferRef = useRef<string[]>([]);
   const pushToTalkAudioRecorderRef = useRef<MediaRecorder | null>(null);
+  const isStoppingPushToTalkRef = useRef<boolean>(false);
 
   // Audio listening state
   const [isListening, setIsListening] = useState(false);
@@ -295,6 +296,7 @@ export default function InterviewInterface({
     if (isPushToTalkActive) return; // Already active
 
     console.log("Starting push-to-talk...");
+    isStoppingPushToTalkRef.current = false;
     setIsPushToTalkActive(true);
     setCurrentTranscription("");
     transcriptionBufferRef.current = [];
@@ -375,6 +377,7 @@ export default function InterviewInterface({
     if (!isPushToTalkActive) return;
 
     console.log("Stopping push-to-talk...");
+    isStoppingPushToTalkRef.current = true;
     setIsPushToTalkActive(false);
 
     // Stop the audio recorder and wait for final chunk to process
@@ -390,9 +393,9 @@ export default function InterviewInterface({
         console.log("Stopping recorder for final chunk processing...");
         pushToTalkAudioRecorderRef.current.stop();
         
-        // Wait longer for final transcription to complete (increased from 2s to 3s)
+        // Wait for final transcription to complete (reduced from 3s to 1s since we're blocking new ones)
         console.log("Waiting for final transcription to process...");
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
 
       pushToTalkAudioRecorderRef.current = null;
@@ -523,6 +526,13 @@ export default function InterviewInterface({
   // Transcribe audio chunk and send via WebSocket
   const transcribeAudioChunk = async () => {
     console.log("transcribeAudioChunk called, chunks:", audioChunksRef.current.length);
+    
+    // Prevent processing if we're stopping push-to-talk
+    if (isStoppingPushToTalkRef.current) {
+      console.log("Skipping transcription - push-to-talk is stopping");
+      audioChunksRef.current = [];
+      return;
+    }
     
     if (audioChunksRef.current.length === 0) {
       console.log("No audio chunks to process");
