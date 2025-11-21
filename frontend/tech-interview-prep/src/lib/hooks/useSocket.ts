@@ -50,8 +50,9 @@ export function useInterviewWebSocket({
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    // Connect to WebSocket
-    const socket = io("http://localhost:8000", {
+    // Connect to WebSocket - use environment variable or fallback to localhost
+    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+    const socket = io(backendUrl, {
       path: "/socket.io/",
       transports: ["websocket"],
     });

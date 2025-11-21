@@ -5,14 +5,18 @@ import { correctTranscription, generateWhisperPrompt } from '@/lib/transcription
 
 export const runtime = 'nodejs'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+// Lazy-load OpenAI client to avoid build-time errors
+function getOpenAIClient() {
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || '',
+  })
+}
 
 // Store last transcription for context continuity
-let lastTranscriptionCache: Record<string, string> = {}
+const lastTranscriptionCache: Record<string, string> = {}
 
 export async function POST(request: NextRequest) {
+  const openai = getOpenAIClient()
   try {
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()

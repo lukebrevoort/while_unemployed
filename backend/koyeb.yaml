@@ -1,0 +1,50 @@
+# Koyeb deployment configuration
+# This file can be used with Koyeb CLI or as reference for web UI deployment
+
+app:
+  name: while-unemployed-backend
+  
+services:
+  - name: api
+    type: web
+    
+    # Docker configuration
+    docker:
+      dockerfile: Dockerfile
+    
+    # Instance configuration
+    instance_type: nano  # Start small, can scale up later
+    
+    # Scaling configuration
+    scaling:
+      min: 1  # Keep at least 1 instance running for WebSocket connections
+      max: 1  # Single instance for MVP (no Redis adapter yet)
+    
+    # Port configuration
+    ports:
+      - port: 8000
+        protocol: http
+    
+    # Health check
+    health_checks:
+      - http:
+          path: /health
+          port: 8000
+        grace_period: 30
+        interval: 30
+        restart_limit: 3
+        timeout: 10
+    
+    # Environment variables (set these in Koyeb dashboard)
+    env:
+      - name: PORT
+        value: "8000"
+      - name: HOST
+        value: "0.0.0.0"
+      # Set these in Koyeb dashboard as secrets:
+      # - OPENAI_API_KEY
+      # - ALLOWED_ORIGINS (comma-separated, include your Vercel URL)
+    
+    # Regions
+    regions:
+      - fra  # Frankfurt - adjust based on your target audience

@@ -10,6 +10,7 @@
     "seed": "tsx src/scripts/seed-problems.ts"
   },
   "dependencies": {
+    "@headlessui/react": "^2.2.9",
     "@monaco-editor/react": "^4.7.0",
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.78.0",

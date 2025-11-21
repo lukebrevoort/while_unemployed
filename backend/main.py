@@ -13,10 +13,15 @@ import openai
 import os
 import base64
 
+# Get configuration from environment variables
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+PORT = int(os.getenv("PORT", "8000"))
+HOST = os.getenv("HOST", "0.0.0.0")
+
 # Create Socket.IO server
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=["http://localhost:3000"],
+    cors_allowed_origins=ALLOWED_ORIGINS,
     logger=True,
     engineio_logger=True,
 )
@@ -27,7 +32,7 @@ app = FastAPI()
 # Add CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -290,5 +295,6 @@ socket_app = socketio.ASGIApp(sio, other_asgi_app=app, socketio_path="socket.io"
 if __name__ == "__main__":
     import uvicorn
 
-    print("Starting Socket.IO server on http://localhost:8000")
-    uvicorn.run(socket_app, host="0.0.0.0", port=8000, log_level="info")
+    print(f"Starting Socket.IO server on http://{HOST}:{PORT}")
+    print(f"Allowed CORS origins: {ALLOWED_ORIGINS}")
+    uvicorn.run(socket_app, host=HOST, port=PORT, log_level="info")
