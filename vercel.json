@@ -2,5 +2,5 @@
   "buildCommand": "cd frontend/tech-interview-prep && npm install && npm run build",
   "outputDirectory": "frontend/tech-interview-prep/.next",
   "framework": "nextjs",
-  "installCommand": "cd frontend/tech-interview-prep && npm install"
+  "installCommand": "npm install"
 }
