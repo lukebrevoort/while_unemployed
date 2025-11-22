@@ -474,7 +474,7 @@ def get_stage_guidance() -> str:
     }
     
     if stage == InterviewStage.CLARIFICATION:
-        guidance["focus"] = "Help candidate understand inputs, outputs, and constraints"
+        guidance["focus"] = "Help candidate understand inputs, outputs, and constraints. DO NOT mention code."
         guidance["key_questions"] = [
             "What questions do you have about the problem?",
             "What should the function return?",
@@ -486,6 +486,7 @@ def get_stage_guidance() -> str:
             "Not discussing edge cases or constraints",
             "Unclear about input/output format"
         ]
+        guidance["code_policy"] = "DO NOT mention code or implementation. Focus on understanding."
         
         if progress.clarifying_questions_asked == 0:
             guidance["next_action"] = "Encourage them to ask clarifying questions"
@@ -495,7 +496,7 @@ def get_stage_guidance() -> str:
             guidance["next_action"] = "Prompt discussion about constraints and edge cases"
     
     elif stage == InterviewStage.ALGORITHM_DESIGN:
-        guidance["focus"] = "Guide candidate through solution design from brute force to optimized"
+        guidance["focus"] = "Guide candidate through solution design from brute force to optimized. DO NOT mention code."
         guidance["key_questions"] = [
             "What's a simple brute force approach?",
             "Can you walk me through an example?",
@@ -509,6 +510,7 @@ def get_stage_guidance() -> str:
             "Not analyzing complexity",
             "Jumping to code without clear algorithm"
         ]
+        guidance["code_policy"] = "DO NOT mention code. Focus on algorithm and approach only."
         
         if not progress.brute_force_discussed:
             guidance["next_action"] = "Ask for a brute force solution first"
@@ -736,6 +738,10 @@ def generate_interview_feedback(state: InterviewState) -> InterviewFeedback:
     implementation_grade = StageGrade(stage_name="Code Implementation")
     implementation_score = 0.0
     
+    # Penalize if they started coding without explaining approach
+    if progress.code_started and not progress.algorithm_traced:
+        implementation_grade.areas_for_improvement.append("Explain your approach before coding - don't jump straight to implementation")
+    
     if progress.code_started:
         implementation_score += 0.3
         implementation_grade.strengths.append("Successfully began implementation")
@@ -809,37 +815,37 @@ def generate_interview_feedback(state: InterviewState) -> InterviewFeedback:
         for stage, weight in weights.items()
     )
     
-    # Apply penalties
-    if state.hints_given > 3:
-        overall_score *= 0.9  # Too many hints
+    # Apply penalties (reduced to be more achievable)
+    if state.hints_given > 5:
+        overall_score *= 0.95  # Too many hints (was 0.9 at >3)
     
-    if total_minutes < 10:
-        overall_score *= 0.85  # Rushed through too fast
-    elif total_minutes > 45:
-        overall_score *= 0.9  # Took too long
+    if total_minutes < 8:
+        overall_score *= 0.92  # Rushed through too fast (was 0.85 at <10)
+    elif total_minutes > 50:
+        overall_score *= 0.95  # Took too long (was 0.9 at >45)
     
     feedback.overall_score = overall_score
     
-    # Determine letter grade
-    if overall_score >= 0.95:
+    # Determine letter grade (adjusted thresholds for achievability)
+    if overall_score >= 0.92:
         feedback.overall_grade = "A+"
-    elif overall_score >= 0.90:
-        feedback.overall_grade = "A"
     elif overall_score >= 0.85:
+        feedback.overall_grade = "A"
+    elif overall_score >= 0.78:
         feedback.overall_grade = "A-"
-    elif overall_score >= 0.80:
+    elif overall_score >= 0.72:
         feedback.overall_grade = "B+"
-    elif overall_score >= 0.75:
+    elif overall_score >= 0.66:
         feedback.overall_grade = "B"
-    elif overall_score >= 0.70:
-        feedback.overall_grade = "B-"
-    elif overall_score >= 0.65:
-        feedback.overall_grade = "C+"
     elif overall_score >= 0.60:
+        feedback.overall_grade = "B-"
+    elif overall_score >= 0.54:
+        feedback.overall_grade = "C+"
+    elif overall_score >= 0.48:
         feedback.overall_grade = "C"
-    elif overall_score >= 0.55:
+    elif overall_score >= 0.42:
         feedback.overall_grade = "C-"
-    elif overall_score >= 0.50:
+    elif overall_score >= 0.36:
         feedback.overall_grade = "D"
     else:
         feedback.overall_grade = "F"
@@ -949,10 +955,12 @@ WHAT TO OBSERVE (silently track for grading later):
 CODE AWARENESS:
 - You receive real-time code updates via WebSocket
 - ALWAYS use get_interview_context first to see if they have code
-- If they have code (code_lines > 0), use analyze_code_quality to review it
-- When they ask questions or seem stuck, check their code first
-- Provide specific feedback based on what you see in their code
+- ONLY mention or reference code if code_lines > 0 (they've actually started writing)
+- If code_lines == 0, focus on their thought process and algorithm design
+- DO NOT ask about code or implementation until they're ready to write
+- When they have code (code_lines > 0), use analyze_code_quality to review it
 - Comment on code when: they ask, they're stuck, or they mention being done
+- During clarification/algorithm stages, let them explain WITHOUT mentioning code
 
 WHEN TO SPEAK:
 1. They ask you a question - answer briefly (check their code first if relevant)
