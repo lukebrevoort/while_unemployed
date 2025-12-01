@@ -18,10 +18,14 @@ import {
   TrendingUp,
   Target,
   CheckCircle2,
+  Clock,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@headlessui/react";
-import { useInterviewWebSocket, InterviewFeedback } from "@/lib/hooks/useSocket";
+import {
+  useInterviewWebSocket,
+  InterviewFeedback,
+} from "@/lib/hooks/useSocket";
 
 interface Problem {
   id: string;
@@ -55,8 +59,13 @@ export default function InterviewInterface({
   const [output, setOutput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
 
+  // Timer state (30 minutes = 1800 seconds)
+  const [timeRemaining, setTimeRemaining] = useState(1800);
+  const [timerStarted, setTimerStarted] = useState(false);
+
   // Feedback state
-  const [interviewFeedback, setInterviewFeedback] = useState<InterviewFeedback | null>(null);
+  const [interviewFeedback, setInterviewFeedback] =
+    useState<InterviewFeedback | null>(null);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
   // AI Chat state
@@ -95,6 +104,13 @@ export default function InterviewInterface({
   // TTS audio playback
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Format time remaining (seconds to MM:SS)
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
   const playTTSAudio = (audioBase64: string) => {
     try {
       // Convert base64 to blob
@@ -131,7 +147,7 @@ export default function InterviewInterface({
   // WebSocket connection
   const handleAIResponse = useCallback((message: string, audio?: string) => {
     console.log("Received AI response:", message);
-    
+
     // Display the response immediately
     setIsAiTyping(false);
     setMessages((prev) => [
@@ -154,13 +170,16 @@ export default function InterviewInterface({
     console.log("Transcription confirmed:", message);
   }, []);
 
-  const handleInterviewEnded = useCallback((feedback: InterviewFeedback | null) => {
-    console.log("Interview ended with feedback:", feedback);
-    if (feedback) {
-      setInterviewFeedback(feedback);
-      setShowFeedbackModal(true);
-    }
-  }, []);
+  const handleInterviewEnded = useCallback(
+    (feedback: InterviewFeedback | null) => {
+      console.log("Interview ended with feedback:", feedback);
+      if (feedback) {
+        setInterviewFeedback(feedback);
+        setShowFeedbackModal(true);
+      }
+    },
+    [],
+  );
 
   const {
     isConnected,
@@ -216,6 +235,24 @@ export default function InterviewInterface({
       return () => clearTimeout(debounceTimer);
     }
   }, [code, isRecording, sendCodeUpdate]);
+
+  // Countdown timer
+  useEffect(() => {
+    if (isRecording && timeRemaining > 0) {
+      const timer = setInterval(() => {
+        setTimeRemaining((prev) => {
+          if (prev <= 1) {
+            // Time's up - auto-submit
+            stopInterview();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(timer);
+    }
+  }, [isRecording, timeRemaining]);
 
   // Start media stream
   const startMedia = async () => {
@@ -354,7 +391,9 @@ export default function InterviewInterface({
           pushToTalkAudioRecorderRef.current &&
           pushToTalkAudioRecorderRef.current.state === "recording"
         ) {
-          console.log("Stopping and restarting audio recorder for transcription...");
+          console.log(
+            "Stopping and restarting audio recorder for transcription...",
+          );
           pushToTalkAudioRecorderRef.current.stop();
           setTimeout(() => {
             if (pushToTalkAudioRecorderRef.current) {
@@ -392,7 +431,7 @@ export default function InterviewInterface({
       if (pushToTalkAudioRecorderRef.current.state !== "inactive") {
         console.log("Stopping recorder for final chunk processing...");
         pushToTalkAudioRecorderRef.current.stop();
-        
+
         // Wait for final transcription to complete (reduced from 3s to 1s since we're blocking new ones)
         console.log("Waiting for final transcription to process...");
         await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -423,10 +462,10 @@ export default function InterviewInterface({
       // Send COMPLETE message AND current code to backend
       console.log("Sending complete message to backend:", finalTranscription);
       console.log("Sending current code snapshot:", code.length, "characters");
-      
+
       // First send the latest code update to ensure state is current
       sendCodeUpdate(code);
-      
+
       // Then send the transcription (agent will have access to updated code)
       sendTranscription(finalTranscription, 0);
 
@@ -525,15 +564,18 @@ export default function InterviewInterface({
 
   // Transcribe audio chunk and send via WebSocket
   const transcribeAudioChunk = async () => {
-    console.log("transcribeAudioChunk called, chunks:", audioChunksRef.current.length);
-    
+    console.log(
+      "transcribeAudioChunk called, chunks:",
+      audioChunksRef.current.length,
+    );
+
     // Prevent processing if we're stopping push-to-talk
     if (isStoppingPushToTalkRef.current) {
       console.log("Skipping transcription - push-to-talk is stopping");
       audioChunksRef.current = [];
       return;
     }
-    
+
     if (audioChunksRef.current.length === 0) {
       console.log("No audio chunks to process");
       return;
@@ -553,8 +595,11 @@ export default function InterviewInterface({
         console.log("Skipping small audio chunk:", audioBlob.size);
         return;
       }
-      
-      console.log("Sending audio blob to transcription API, size:", audioBlob.size);
+
+      console.log(
+        "Sending audio blob to transcription API, size:",
+        audioBlob.size,
+      );
       const formData = new FormData();
       formData.append("audio", audioBlob, "audio.webm");
       formData.append("problemTitle", problem.title);
@@ -572,18 +617,22 @@ export default function InterviewInterface({
 
       const { text, wasAutoCorrected, validation } = await response.json();
       console.log("Received transcription:", text);
-      
+
       if (wasAutoCorrected) {
         console.log("Transcription was auto-corrected");
       }
-      
+
       if (validation && validation.confidence < 0.7) {
-        console.warn("Low confidence transcription:", validation.confidence, validation.issues);
+        console.warn(
+          "Low confidence transcription:",
+          validation.confidence,
+          validation.issues,
+        );
       }
 
       if (text && text.trim().length > 0) {
         console.log("Processing transcription, text:", text);
-        
+
         // Add transcribed text to buffer for streaming display
         transcriptionBufferRef.current.push(text);
 
@@ -1042,7 +1091,8 @@ export default function InterviewInterface({
                             </p>
                             {code && code.trim().length > 0 && (
                               <p className="text-blue-600 font-medium">
-                                💡 Your code will be analyzed when you stop listening
+                                💡 Your code will be analyzed when you stop
+                                listening
                               </p>
                             )}
                           </div>
@@ -1110,6 +1160,24 @@ export default function InterviewInterface({
             </button>
           </div>
           <div className="flex gap-2 items-center">
+            {/* Timer Display */}
+            {isRecording && (
+              <div
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-mono font-bold text-lg transition-all ${
+                  timeRemaining <= 300
+                    ? "bg-red-600 text-white animate-pulse"
+                    : timeRemaining <= 600
+                      ? "bg-yellow-600 text-white"
+                      : "bg-gray-700 text-white"
+                }`}
+              >
+                <Clock
+                  size={20}
+                  className={timeRemaining <= 300 ? "animate-pulse" : ""}
+                />
+                <span>{formatTime(timeRemaining)}</span>
+              </div>
+            )}
             {!isConnected && (
               <span className="text-xs text-red-400 flex items-center gap-1">
                 <WifiOff size={14} />
@@ -1245,7 +1313,9 @@ export default function InterviewInterface({
                   <Award size={40} className="text-yellow-300" />
                   <div>
                     <h2 className="text-3xl font-bold">Interview Complete!</h2>
-                    <p className="text-blue-100">Here's your performance feedback</p>
+                    <p className="text-blue-100">
+                      Here's your performance feedback
+                    </p>
                   </div>
                 </div>
                 <button
@@ -1301,79 +1371,100 @@ export default function InterviewInterface({
               <div>
                 <div className="flex items-center gap-2 mb-4">
                   <TrendingUp className="text-blue-600" size={24} />
-                  <h3 className="text-xl font-bold text-gray-900">Stage Breakdown</h3>
+                  <h3 className="text-xl font-bold text-gray-900">
+                    Stage Breakdown
+                  </h3>
                 </div>
                 <div className="space-y-4">
-                  {Object.entries(interviewFeedback.stage_grades).map(([key, grade]) => (
-                    <div
-                      key={key}
-                      className={`border-2 rounded-xl p-4 ${
-                        grade.completed
-                          ? "border-green-200 bg-green-50"
-                          : "border-gray-200 bg-gray-50"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          {grade.completed ? (
-                            <CheckCircle2 className="text-green-600" size={20} />
-                          ) : (
-                            <div className="w-5 h-5 border-2 border-gray-400 rounded-full" />
-                          )}
-                          <h4 className="font-semibold text-gray-900">{grade.stage_name}</h4>
+                  {Object.entries(interviewFeedback.stage_grades).map(
+                    ([key, grade]) => (
+                      <div
+                        key={key}
+                        className={`border-2 rounded-xl p-4 ${
+                          grade.completed
+                            ? "border-green-200 bg-green-50"
+                            : "border-gray-200 bg-gray-50"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            {grade.completed ? (
+                              <CheckCircle2
+                                className="text-green-600"
+                                size={20}
+                              />
+                            ) : (
+                              <div className="w-5 h-5 border-2 border-gray-400 rounded-full" />
+                            )}
+                            <h4 className="font-semibold text-gray-900">
+                              {grade.stage_name}
+                            </h4>
+                          </div>
+                          <span className="text-lg font-bold text-gray-900">
+                            {grade.score.toFixed(0)}%
+                          </span>
                         </div>
-                        <span className="text-lg font-bold text-gray-900">
-                          {grade.score.toFixed(0)}%
-                        </span>
-                      </div>
-                      
-                      {/* Progress Bar */}
-                      <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
-                        <div
-                          className={`h-2 rounded-full ${
-                            grade.score >= 80
-                              ? "bg-green-600"
-                              : grade.score >= 60
-                              ? "bg-yellow-500"
-                              : "bg-red-500"
-                          }`}
-                          style={{ width: `${grade.score}%` }}
-                        />
-                      </div>
 
-                      {grade.strengths.length > 0 && (
-                        <div className="mb-2">
-                          <p className="text-xs font-semibold text-green-700 mb-1">
-                            Strengths:
-                          </p>
-                          <ul className="text-sm text-gray-700 space-y-1">
-                            {grade.strengths.map((strength, idx) => (
-                              <li key={idx} className="flex items-start gap-2">
-                                <span className="text-green-600 mt-0.5">✓</span>
-                                <span>{strength}</span>
-                              </li>
-                            ))}
-                          </ul>
+                        {/* Progress Bar */}
+                        <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
+                          <div
+                            className={`h-2 rounded-full ${
+                              grade.score >= 80
+                                ? "bg-green-600"
+                                : grade.score >= 60
+                                  ? "bg-yellow-500"
+                                  : "bg-red-500"
+                            }`}
+                            style={{ width: `${grade.score}%` }}
+                          />
                         </div>
-                      )}
 
-                      {grade.areas_for_improvement.length > 0 && (
-                        <div>
-                          <p className="text-xs font-semibold text-orange-700 mb-1">
-                            Areas for Improvement:
-                          </p>
-                          <ul className="text-sm text-gray-700 space-y-1">
-                            {grade.areas_for_improvement.map((improvement, idx) => (
-                              <li key={idx} className="flex items-start gap-2">
-                                <span className="text-orange-600 mt-0.5">•</span>
-                                <span>{improvement}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                        {grade.strengths.length > 0 && (
+                          <div className="mb-2">
+                            <p className="text-xs font-semibold text-green-700 mb-1">
+                              Strengths:
+                            </p>
+                            <ul className="text-sm text-gray-700 space-y-1">
+                              {grade.strengths.map((strength, idx) => (
+                                <li
+                                  key={idx}
+                                  className="flex items-start gap-2"
+                                >
+                                  <span className="text-green-600 mt-0.5">
+                                    ✓
+                                  </span>
+                                  <span>{strength}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {grade.areas_for_improvement.length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-orange-700 mb-1">
+                              Areas for Improvement:
+                            </p>
+                            <ul className="text-sm text-gray-700 space-y-1">
+                              {grade.areas_for_improvement.map(
+                                (improvement, idx) => (
+                                  <li
+                                    key={idx}
+                                    className="flex items-start gap-2"
+                                  >
+                                    <span className="text-orange-600 mt-0.5">
+                                      •
+                                    </span>
+                                    <span>{improvement}</span>
+                                  </li>
+                                ),
+                              )}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  )}
                 </div>
               </div>
 
@@ -1386,8 +1477,13 @@ export default function InterviewInterface({
                   </h3>
                   <ul className="space-y-2">
                     {interviewFeedback.key_strengths.map((strength, idx) => (
-                      <li key={idx} className="flex items-start gap-2 text-gray-700">
-                        <span className="text-green-600 font-bold mt-0.5">✓</span>
+                      <li
+                        key={idx}
+                        className="flex items-start gap-2 text-gray-700"
+                      >
+                        <span className="text-green-600 font-bold mt-0.5">
+                          ✓
+                        </span>
                         <span>{strength}</span>
                       </li>
                     ))}
@@ -1403,12 +1499,19 @@ export default function InterviewInterface({
                     Areas to Focus On
                   </h3>
                   <ul className="space-y-2">
-                    {interviewFeedback.key_improvements.map((improvement, idx) => (
-                      <li key={idx} className="flex items-start gap-2 text-gray-700">
-                        <span className="text-orange-600 font-bold mt-0.5">•</span>
-                        <span>{improvement}</span>
-                      </li>
-                    ))}
+                    {interviewFeedback.key_improvements.map(
+                      (improvement, idx) => (
+                        <li
+                          key={idx}
+                          className="flex items-start gap-2 text-gray-700"
+                        >
+                          <span className="text-orange-600 font-bold mt-0.5">
+                            •
+                          </span>
+                          <span>{improvement}</span>
+                        </li>
+                      ),
+                    )}
                   </ul>
                 </div>
               )}
@@ -1421,7 +1524,10 @@ export default function InterviewInterface({
                 </h3>
                 <ul className="space-y-2">
                   {interviewFeedback.next_steps.map((step, idx) => (
-                    <li key={idx} className="flex items-start gap-2 text-gray-700">
+                    <li
+                      key={idx}
+                      className="flex items-start gap-2 text-gray-700"
+                    >
                       <span className="text-blue-600 font-bold mt-0.5">→</span>
                       <span>{step}</span>
                     </li>
@@ -1429,14 +1535,17 @@ export default function InterviewInterface({
                 </ul>
                 <div className="mt-4 pt-4 border-t border-blue-200">
                   <p className="text-sm text-gray-600">
-                    <span className="font-semibold">Recommended Difficulty: </span>
+                    <span className="font-semibold">
+                      Recommended Difficulty:{" "}
+                    </span>
                     <span
                       className={`px-2 py-1 rounded-full text-xs font-medium ${
                         interviewFeedback.difficulty_recommendation === "hard"
                           ? "bg-red-100 text-red-800"
-                          : interviewFeedback.difficulty_recommendation === "medium"
-                          ? "bg-yellow-100 text-yellow-800"
-                          : "bg-green-100 text-green-800"
+                          : interviewFeedback.difficulty_recommendation ===
+                              "medium"
+                            ? "bg-yellow-100 text-yellow-800"
+                            : "bg-green-100 text-green-800"
                       }`}
                     >
                       {interviewFeedback.difficulty_recommendation.toUpperCase()}
