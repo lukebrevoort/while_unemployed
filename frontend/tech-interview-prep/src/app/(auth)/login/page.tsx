@@ -108,18 +108,6 @@ export default function LoginPage() {
             </button>
           </div>
         </form>
-
-        {/* Test Accounts Info */}
-        <div className="mt-4 p-4 bg-blue-50 rounded-md">
-          <p className="text-xs text-blue-800 font-semibold mb-2">
-            Test Accounts:
-          </p>
-          <p className="text-xs text-blue-700">
-            Email: test@example.com
-            <br />
-            Password: password123
-          </p>
-        </div>
       </div>
     </div>
   );
