@@ -26,6 +26,7 @@ import {
   useInterviewWebSocket,
   InterviewFeedback,
 } from "@/lib/hooks/useSocket";
+import { MicVAD, utils } from "@ricky0123/vad-web";
 
 interface Problem {
   id: string;
@@ -74,18 +75,15 @@ export default function InterviewInterface({
   const [isAiTyping, setIsAiTyping] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Push-to-talk state
-  const [isPushToTalkActive, setIsPushToTalkActive] = useState(false);
+  // VAD state (replaces push-to-talk)
+  const [isVADActive, setIsVADActive] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [currentTranscription, setCurrentTranscription] = useState("");
   const transcriptionBufferRef = useRef<string[]>([]);
-  const pushToTalkAudioRecorderRef = useRef<MediaRecorder | null>(null);
-  const isStoppingPushToTalkRef = useRef<boolean>(false);
+  const vadInstanceRef = useRef<MicVAD | null>(null);
+  const isProcessingTranscriptionRef = useRef<boolean>(false);
   const transcriptionAbortControllerRef = useRef<AbortController | null>(null);
-
-  // Audio listening state
-  const [isListening, setIsListening] = useState(false);
-  const [silenceDuration, setSilenceDuration] = useState(0);
-  const lastSpeechTimeRef = useRef<number>(Date.now());
+  const currentAudioChunksRef = useRef<Float32Array[]>([]);
 
   // Recording refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -208,23 +206,7 @@ export default function InterviewInterface({
     setCode(starterCode);
   }, [language, problem]);
 
-  // Track silence duration
-  useEffect(() => {
-    if (isRecording && isMicOn) {
-      const interval = setInterval(() => {
-        const timeSinceLastSpeech =
-          (Date.now() - lastSpeechTimeRef.current) / 1000;
-        setSilenceDuration(timeSinceLastSpeech);
-
-        // Send silence event every 5 seconds if user hasn't spoken
-        if (timeSinceLastSpeech >= 5 && timeSinceLastSpeech % 5 < 0.1) {
-          sendTranscription("", timeSinceLastSpeech);
-        }
-      }, 100);
-
-      return () => clearInterval(interval);
-    }
-  }, [isRecording, isMicOn, sendTranscription]);
+  // VAD handles silence detection automatically - no manual tracking needed
 
   // Send code updates periodically
   useEffect(() => {
@@ -312,7 +294,10 @@ export default function InterviewInterface({
         if (audioTrack) audioTrack.stop();
       }
       setIsMicOn(false);
-      setIsListening(false);
+      // Stop VAD when mic is turned off
+      if (isVADActive) {
+        await stopVAD();
+      }
     } else {
       setIsMicOn(true);
       if (isCameraOn || isRecording) {
@@ -325,299 +310,97 @@ export default function InterviewInterface({
   };
 
   // Push-to-talk: Start listening
-  const startPushToTalk = async () => {
+  // Initialize VAD for automatic speech detection
+  const initializeVAD = async () => {
     if (!isRecording || !isMicOn) {
-      alert("Please start the interview and enable your microphone first");
+      console.log("Cannot initialize VAD: interview not started or mic off");
       return;
     }
 
-    if (isPushToTalkActive) return; // Already active
-
-    console.log("Starting push-to-talk...");
-    isStoppingPushToTalkRef.current = false;
-    transcriptionAbortControllerRef.current = new AbortController();
-    setIsPushToTalkActive(true);
-    setCurrentTranscription("");
-    transcriptionBufferRef.current = [];
-
-    // Start audio recording for this push-to-talk session
-    try {
-      if (!streamRef.current) return;
-
-      const audioStream = new MediaStream(streamRef.current.getAudioTracks());
-
-      let mimeType = "";
-      const preferredTypes = [
-        "audio/webm;codecs=opus",
-        "audio/webm",
-        "audio/ogg",
-        "audio/mp4",
-      ];
-
-      for (const type of preferredTypes) {
-        if (MediaRecorder.isTypeSupported(type)) {
-          mimeType = type;
-          break;
-        }
-      }
-
-      if (!mimeType) {
-        console.error("No supported audio format found");
-        return;
-      }
-
-      audioMimeTypeRef.current = mimeType;
-      const audioRecorder = new MediaRecorder(audioStream, { mimeType });
-      audioChunksRef.current = [];
-
-      audioRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      audioRecorder.onstop = async () => {
-        // Process when stopped
-        console.log("Audio recorder stopped, processing chunks...");
-        if (audioChunksRef.current.length > 0) {
-          await transcribeAudioChunk();
-        }
-      };
-
-      // Record in 3-second chunks for real-time transcription
-      audioRecorder.start();
-      console.log("Audio recorder started");
-
-      const restartInterval = setInterval(() => {
-        if (
-          pushToTalkAudioRecorderRef.current &&
-          pushToTalkAudioRecorderRef.current.state === "recording"
-        ) {
-          console.log(
-            "Stopping and restarting audio recorder for transcription...",
-          );
-          pushToTalkAudioRecorderRef.current.stop();
-          setTimeout(() => {
-            if (pushToTalkAudioRecorderRef.current) {
-              pushToTalkAudioRecorderRef.current.start();
-            }
-          }, 100);
-        }
-      }, 3000);
-
-      (audioRecorder as any).restartInterval = restartInterval;
-      pushToTalkAudioRecorderRef.current = audioRecorder;
-    } catch (error) {
-      console.error("Push-to-talk start error:", error);
-      setIsPushToTalkActive(false);
-    }
-  };
-
-  // Push-to-talk: Stop listening and send message
-  const stopPushToTalk = async () => {
-    if (!isPushToTalkActive) return;
-
-    console.log("Stopping push-to-talk...");
-    isStoppingPushToTalkRef.current = true;
-    setIsPushToTalkActive(false);
-
-    // Abort any in-flight transcription requests
-    if (transcriptionAbortControllerRef.current) {
-      transcriptionAbortControllerRef.current.abort();
-      transcriptionAbortControllerRef.current = null;
-    }
-
-    // Stop the audio recorder and wait for final chunk to process
-    if (pushToTalkAudioRecorderRef.current) {
-      // CRITICAL: Clear interval FIRST to prevent any new recorder restarts
-      const restartInterval = (pushToTalkAudioRecorderRef.current as any)
-        .restartInterval;
-      if (restartInterval) {
-        clearInterval(restartInterval);
-        console.log("Cleared restart interval");
-      }
-
-      // Stop the recorder - this triggers onstop which processes final chunk
-      if (pushToTalkAudioRecorderRef.current.state !== "inactive") {
-        console.log("Stopping recorder for final chunk processing...");
-        pushToTalkAudioRecorderRef.current.stop();
-
-        // Wait for final transcription to complete
-        console.log("Waiting for final transcription to process...");
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-
-      pushToTalkAudioRecorderRef.current = null;
-    }
-
-    // Use a ref to get the latest transcription value
-    const finalTranscription = transcriptionBufferRef.current.join(" ");
-    console.log("Final complete transcription to send:", finalTranscription);
-
-    // Send the complete message with current code
-    if (finalTranscription.trim()) {
-      const userMessage: Message = {
-        role: "user",
-        content: finalTranscription,
-        timestamp: new Date().toISOString(),
-        isSending: true,
-      };
-
-      setMessages((prev) => [...prev, userMessage]);
-
-      // Clear transcription
-      setCurrentTranscription("");
-      transcriptionBufferRef.current = [];
-
-      // Send COMPLETE message AND current code to backend
-      console.log("Sending complete message to backend:", finalTranscription);
-      console.log("Sending current code snapshot:", code.length, "characters");
-
-      // First send the latest code update to ensure state is current
-      sendCodeUpdate(code);
-
-      // Then send the transcription (agent will have access to updated code)
-      sendTranscription(finalTranscription, 0);
-
-      // Mark as sent and show AI typing
-      setTimeout(() => {
-        setMessages((prev) =>
-          prev.map((msg, idx) =>
-            idx === prev.length - 1 ? { ...msg, isSending: false } : msg,
-          ),
-        );
-        setIsAiTyping(true);
-        console.log("Waiting for AI response...");
-      }, 300);
-    } else {
-      console.log("No transcription to send");
-    }
-  };
-
-  // Real-time audio transcription with WebSocket
-  const startAudioTranscription = async (stream: MediaStream) => {
-    if (!isMicOn) return;
-
-    try {
-      const audioStream = new MediaStream(stream.getAudioTracks());
-
-      // Try different mime types in order of preference for OpenAI Whisper
-      let mimeType = "";
-      const preferredTypes = [
-        "audio/mp4",
-        "audio/mpeg",
-        "audio/ogg",
-        "audio/wav",
-        "audio/webm;codecs=opus",
-        "audio/webm",
-      ];
-
-      for (const type of preferredTypes) {
-        if (MediaRecorder.isTypeSupported(type)) {
-          mimeType = type;
-          break;
-        }
-      }
-
-      if (!mimeType) {
-        console.error("No supported audio format found");
-        return;
-      }
-
-      console.log("Using audio format:", mimeType);
-      audioMimeTypeRef.current = mimeType;
-
-      const audioRecorder = new MediaRecorder(audioStream, { mimeType });
-      audioChunksRef.current = [];
-
-      audioRecorder.ondataavailable = async (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      audioRecorder.onstop = async () => {
-        // Process when stopped
-        if (audioChunksRef.current.length > 0) {
-          await transcribeAudioChunk();
-        }
-      };
-
-      // Start recording with timeslice - this creates complete chunks with headers
-      audioRecorder.start();
-
-      // Stop and restart every 3 seconds to get complete audio files with headers
-      const restartInterval = setInterval(() => {
-        if (
-          audioRecorderRef.current &&
-          audioRecorderRef.current.state === "recording"
-        ) {
-          audioRecorderRef.current.stop();
-          // Small delay then restart
-          setTimeout(() => {
-            if (audioRecorderRef.current) {
-              audioRecorderRef.current.start();
-            }
-          }, 100);
-        }
-      }, 3000);
-
-      // Store interval reference for cleanup
-      (audioRecorder as any).restartInterval = restartInterval;
-
-      audioRecorderRef.current = audioRecorder;
-      setIsListening(true);
-    } catch (error) {
-      console.error("Audio transcription error:", error);
-    }
-  };
-
-  // Transcribe audio chunk and send via WebSocket
-  const transcribeAudioChunk = async () => {
-    console.log(
-      "transcribeAudioChunk called, chunks:",
-      audioChunksRef.current.length,
-    );
-
-    // Prevent processing if we're stopping push-to-talk
-    if (isStoppingPushToTalkRef.current) {
-      console.log("Skipping transcription - push-to-talk is stopping");
-      audioChunksRef.current = [];
+    if (vadInstanceRef.current) {
+      console.log("VAD already initialized");
       return;
     }
 
-    if (audioChunksRef.current.length === 0) {
-      console.log("No audio chunks to process");
-      return;
-    }
-
+    console.log("Initializing VAD...");
+    
     try {
-      // Create a complete audio blob from all accumulated chunks
-      const audioBlob = new Blob(audioChunksRef.current, {
-        type: audioMimeTypeRef.current,
+      const vad = await MicVAD.new({
+        // Callbacks for speech detection
+        onSpeechStart: () => {
+          console.log("Speech detected - user started speaking");
+          setIsSpeaking(true);
+          setCurrentTranscription("");
+          transcriptionBufferRef.current = [];
+          currentAudioChunksRef.current = [];
+          transcriptionAbortControllerRef.current = new AbortController();
+        },
+        
+        onSpeechEnd: async (audio: Float32Array) => {
+          console.log("Speech ended - processing audio");
+          setIsSpeaking(false);
+          
+          // Prevent multiple simultaneous transcriptions
+          if (isProcessingTranscriptionRef.current) {
+            console.log("Already processing transcription, skipping");
+            return;
+          }
+          
+          isProcessingTranscriptionRef.current = true;
+          
+          try {
+            await processVADAudio(audio);
+          } finally {
+            isProcessingTranscriptionRef.current = false;
+          }
+        },
+        
+        // VAD configuration
+        positiveSpeechThreshold: 0.8,  // Higher = more confident speech detection
+        negativeSpeechThreshold: 0.8 - 0.15,  // When to stop detecting speech
+        redemptionMs: 800,  // Milliseconds to wait before ending speech
+        preSpeechPadMs: 100,  // Milliseconds to include before speech starts
+        minSpeechMs: 300,  // Minimum milliseconds for valid speech
+        
+        // Asset paths for ONNX model and worklet
+        baseAssetPath: "/",
+        onnxWASMBasePath: "/",
       });
 
-      // Clear chunks after creating blob
-      audioChunksRef.current = [];
+      vadInstanceRef.current = vad;
+      setIsVADActive(true);
+      console.log("VAD initialized successfully");
+    } catch (error) {
+      console.error("Failed to initialize VAD:", error);
+      alert("Failed to initialize voice detection. Please try again.");
+    }
+  };
 
-      // Skip very small audio files (likely silence or incomplete)
+  // Process audio from VAD
+  const processVADAudio = async (audio: Float32Array) => {
+    console.log("Processing VAD audio, samples:", audio.length);
+    
+    try {
+      // Convert Float32Array to the format expected by transcription API
+      // VAD gives us Float32Array at 16kHz, we need to convert to Int16Array
+      const int16Audio = new Int16Array(audio.length);
+      for (let i = 0; i < audio.length; i++) {
+        const s = Math.max(-1, Math.min(1, audio[i]));
+        int16Audio[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      
+      // Create audio blob for transcription
+      const audioBlob = new Blob([int16Audio.buffer], { type: "audio/wav" });
+      
+      // Skip very small audio (likely noise)
       if (audioBlob.size < 10000) {
-        console.log("Skipping small audio chunk:", audioBlob.size);
+        console.log("Audio too small, skipping transcription");
         return;
       }
-
-      // Double-check we're not stopping before making the API call
-      if (isStoppingPushToTalkRef.current) {
-        console.log("Aborting transcription - stop was triggered during blob creation");
-        return;
-      }
-
-      console.log(
-        "Sending audio blob to transcription API, size:",
-        audioBlob.size,
-      );
+      
+      console.log("Sending audio to transcription API, size:", audioBlob.size);
       const formData = new FormData();
-      formData.append("audio", audioBlob, "audio.webm");
+      formData.append("audio", audioBlob, "audio.wav");
       formData.append("problemTitle", problem.title);
       formData.append("problemDescription", problem.description);
 
@@ -634,52 +417,86 @@ export default function InterviewInterface({
 
       const { text, wasAutoCorrected, validation } = await response.json();
       
-      // Check again after async operation - user may have stopped during transcription
-      if (isStoppingPushToTalkRef.current) {
-        console.log("Discarding transcription - stop was triggered during API call");
-        return;
-      }
-      
       console.log("Received transcription:", text);
 
-      if (wasAutoCorrected) {
-        console.log("Transcription was auto-corrected");
-      }
-
-      if (validation && validation.confidence < 0.7) {
-        console.warn(
-          "Low confidence transcription:",
-          validation.confidence,
-          validation.issues,
-        );
-      }
-
       if (text && text.trim().length > 0) {
-        console.log("Processing transcription, text:", text);
+        // Show the message immediately
+        const userMessage: Message = {
+          role: "user",
+          content: text,
+          timestamp: new Date().toISOString(),
+          isSending: true,
+        };
 
-        // Add transcribed text to buffer for streaming display
-        transcriptionBufferRef.current.push(text);
+        setMessages((prev) => [...prev, userMessage]);
 
-        // Update streaming transcription display (just for user to see)
-        setCurrentTranscription((prev) => {
-          const newText = prev ? `${prev} ${text}` : text;
-          console.log("Updated current transcription:", newText);
-          return newText;
-        });
+        // Send to backend
+        console.log("Sending transcription to backend:", text);
+        sendCodeUpdate(code);
+        sendTranscription(text, 0);
 
-        // DON'T send to backend yet - wait until user stops push-to-talk
-        console.log("Transcription buffered locally (not sent to backend yet)");
-      } else {
-        console.log("Empty or whitespace-only transcription");
+        // Mark as sent and show AI typing
+        setTimeout(() => {
+          setMessages((prev) =>
+            prev.map((msg, idx) =>
+              idx === prev.length - 1 ? { ...msg, isSending: false } : msg,
+            ),
+          );
+          setIsAiTyping(true);
+        }, 300);
       }
     } catch (error) {
-      // Ignore abort errors - these are intentional
       if (error instanceof Error && error.name === 'AbortError') {
-        console.log("Transcription request aborted (expected)");
+        console.log("Transcription aborted (expected)");
         return;
       }
-      console.error("Transcription error:", error);
+      console.error("Error processing VAD audio:", error);
     }
+  };
+
+  // Stop VAD
+  const stopVAD = async () => {
+    console.log("Stopping VAD...");
+    
+    if (transcriptionAbortControllerRef.current) {
+      transcriptionAbortControllerRef.current.abort();
+      transcriptionAbortControllerRef.current = null;
+    }
+    
+    if (vadInstanceRef.current) {
+      vadInstanceRef.current.pause();
+      vadInstanceRef.current.destroy();
+      vadInstanceRef.current = null;
+    }
+    
+    setIsVADActive(false);
+    setIsSpeaking(false);
+    setCurrentTranscription("");
+    transcriptionBufferRef.current = [];
+    currentAudioChunksRef.current = [];
+  };
+
+  // Deprecated functions - kept for compatibility
+  const startPushToTalk = async () => {
+    console.warn("startPushToTalk is deprecated, use VAD instead");
+    await initializeVAD();
+  };
+
+  const stopPushToTalk = async () => {
+    console.warn("stopPushToTalk is deprecated, use VAD instead");
+    await stopVAD();
+  };
+
+  // Real-time audio transcription with WebSocket
+  // Deprecated - VAD handles audio detection now
+  const startAudioTranscription = async (stream: MediaStream) => {
+    console.warn("startAudioTranscription is deprecated, VAD handles this now");
+  };
+
+  // Transcribe audio chunk and send via WebSocket
+  // Deprecated - transcription now handled by VAD
+  const transcribeAudioChunk = async () => {
+    console.warn("transcribeAudioChunk is deprecated, VAD handles transcription now");
   };
 
   // Finalize the user message after 3 seconds of silence
@@ -757,12 +574,15 @@ export default function InterviewInterface({
         ...prevMessages,
         {
           role: "assistant",
-          content: `Hi! Let's work on ${problem.title}. Take a moment to read the problem, and when you're ready, click "Start Listening" to explain your initial approach.`,
+          content: `Hi! Let's work on ${problem.title}. I'm listening - just start speaking naturally when you're ready to explain your approach.`,
           timestamp: new Date().toISOString(),
         },
       ]);
 
-      // Note: We don't auto-start audio transcription anymore - user clicks button
+      // Initialize VAD for automatic speech detection
+      if (isMicOn) {
+        await initializeVAD();
+      }
     } catch (error) {
       console.error("Start interview error:", error);
       alert("Failed to start interview");
@@ -771,28 +591,15 @@ export default function InterviewInterface({
 
   // Stop interview
   const stopInterview = async () => {
-    // Stop push-to-talk if active
-    if (isPushToTalkActive) {
-      await stopPushToTalk();
+    // Stop VAD if active
+    if (isVADActive) {
+      await stopVAD();
     }
 
     // Abort any remaining transcription requests
     if (transcriptionAbortControllerRef.current) {
       transcriptionAbortControllerRef.current.abort();
       transcriptionAbortControllerRef.current = null;
-    }
-
-    // Stop push-to-talk recorder
-    if (pushToTalkAudioRecorderRef.current) {
-      const restartInterval = (pushToTalkAudioRecorderRef.current as any)
-        .restartInterval;
-      if (restartInterval) {
-        clearInterval(restartInterval);
-      }
-      if (pushToTalkAudioRecorderRef.current.state !== "inactive") {
-        pushToTalkAudioRecorderRef.current.stop();
-      }
-      pushToTalkAudioRecorderRef.current = null;
     }
 
     // End WebSocket session
@@ -887,22 +694,19 @@ export default function InterviewInterface({
     return () => {
       stopMedia();
       
+      // Cleanup VAD
+      if (vadInstanceRef.current) {
+        vadInstanceRef.current.pause();
+        vadInstanceRef.current.destroy();
+        vadInstanceRef.current = null;
+      }
+      
       // Abort any pending transcriptions
       if (transcriptionAbortControllerRef.current) {
         transcriptionAbortControllerRef.current.abort();
         transcriptionAbortControllerRef.current = null;
       }
       
-      if (pushToTalkAudioRecorderRef.current) {
-        const restartInterval = (pushToTalkAudioRecorderRef.current as any)
-          .restartInterval;
-        if (restartInterval) {
-          clearInterval(restartInterval);
-        }
-        if (pushToTalkAudioRecorderRef.current.state !== "inactive") {
-          pushToTalkAudioRecorderRef.current.stop();
-        }
-      }
       // Cleanup TTS audio
       if (audioRef.current) {
         audioRef.current.pause();
@@ -995,15 +799,20 @@ export default function InterviewInterface({
                         </h3>
                         <p className="text-sm font-medium text-blue-100 mt-1 flex items-center gap-2">
                           {isRecording ? (
-                            isPushToTalkActive ? (
+                            isSpeaking ? (
                               <>
                                 <span className="w-2 h-2 bg-red-400 rounded-full animate-pulse" />
-                                Recording your response...
+                                Listening to your response...
+                              </>
+                            ) : isVADActive ? (
+                              <>
+                                <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                                Ready - speak naturally
                               </>
                             ) : (
                               <>
                                 <span className="w-2 h-2 bg-yellow-400 rounded-full" />
-                                Click "Start Listening" to speak
+                                Initializing voice detection...
                               </>
                             )
                           ) : (
@@ -1088,57 +897,51 @@ export default function InterviewInterface({
                     <div ref={chatEndRef} />
                   </div>
 
-                  {/* Input - Push-to-talk or text input */}
+                  {/* Input - VAD status or text input */}
                   {isMicOn && isRecording ? (
                     <div className="p-4 border-t border-gray-200 bg-white">
                       <div className="flex flex-col gap-3">
-                        {/* Push-to-talk button */}
-                        <button
-                          onClick={
-                            isPushToTalkActive
-                              ? stopPushToTalk
-                              : startPushToTalk
-                          }
-                          disabled={isAiTyping}
-                          className={`w-full py-4 rounded-lg font-semibold text-white transition-all flex items-center justify-center gap-3 ${
-                            isPushToTalkActive
-                              ? "bg-red-600 hover:bg-red-700 animate-pulse shadow-lg"
-                              : "bg-green-600 hover:bg-green-700 shadow-md"
-                          } disabled:bg-gray-400 disabled:cursor-not-allowed`}
+                        {/* VAD Status Indicator */}
+                        <div className={`w-full py-4 rounded-lg font-semibold text-white transition-all flex items-center justify-center gap-3 ${
+                            isSpeaking
+                              ? "bg-red-600 animate-pulse shadow-lg"
+                              : isVADActive
+                                ? "bg-green-600 shadow-md"
+                                : "bg-gray-400"
+                          }`}
                         >
                           <Mic
                             size={24}
-                            className={
-                              isPushToTalkActive ? "animate-pulse" : ""
-                            }
+                            className={isSpeaking ? "animate-pulse" : ""}
                           />
                           <span className="text-lg">
-                            {isPushToTalkActive
-                              ? "Stop Listening"
-                              : "Start Listening"}
+                            {isSpeaking
+                              ? "Listening..."
+                              : isVADActive
+                                ? "Ready to Listen"
+                                : "Initializing..."}
                           </span>
-                        </button>
+                        </div>
 
-                        {isPushToTalkActive && currentTranscription && (
-                          <div className="text-xs text-gray-600 text-center">
-                            <p className="font-medium">
-                              Recording... Click "Stop Listening" when done
-                            </p>
-                          </div>
-                        )}
-
-                        {!isPushToTalkActive && !currentTranscription && (
+                        {/* Status messages */}
+                        {isVADActive && !isSpeaking && !isAiTyping && (
                           <div className="text-xs text-gray-500 text-center space-y-1">
                             <p>
-                              Click the button to start speaking to the AI
-                              interviewer
+                              🎤 Just start speaking naturally - I'll detect when you're talking
                             </p>
                             {code && code.trim().length > 0 && (
                               <p className="text-blue-600 font-medium">
-                                💡 Your code will be analyzed when you stop
-                                listening
+                                💡 Your code will be analyzed automatically
                               </p>
                             )}
+                          </div>
+                        )}
+
+                        {isSpeaking && (
+                          <div className="text-xs text-gray-600 text-center">
+                            <p className="font-medium animate-pulse">
+                              🎙️ Listening to your response...
+                            </p>
                           </div>
                         )}
                       </div>
