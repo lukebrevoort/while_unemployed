@@ -80,6 +80,7 @@ export default function InterviewInterface({
   const transcriptionBufferRef = useRef<string[]>([]);
   const pushToTalkAudioRecorderRef = useRef<MediaRecorder | null>(null);
   const isStoppingPushToTalkRef = useRef<boolean>(false);
+  const transcriptionAbortControllerRef = useRef<AbortController | null>(null);
 
   // Audio listening state
   const [isListening, setIsListening] = useState(false);
@@ -334,6 +335,7 @@ export default function InterviewInterface({
 
     console.log("Starting push-to-talk...");
     isStoppingPushToTalkRef.current = false;
+    transcriptionAbortControllerRef.current = new AbortController();
     setIsPushToTalkActive(true);
     setCurrentTranscription("");
     transcriptionBufferRef.current = [];
@@ -419,12 +421,20 @@ export default function InterviewInterface({
     isStoppingPushToTalkRef.current = true;
     setIsPushToTalkActive(false);
 
+    // Abort any in-flight transcription requests
+    if (transcriptionAbortControllerRef.current) {
+      transcriptionAbortControllerRef.current.abort();
+      transcriptionAbortControllerRef.current = null;
+    }
+
     // Stop the audio recorder and wait for final chunk to process
     if (pushToTalkAudioRecorderRef.current) {
+      // CRITICAL: Clear interval FIRST to prevent any new recorder restarts
       const restartInterval = (pushToTalkAudioRecorderRef.current as any)
         .restartInterval;
       if (restartInterval) {
         clearInterval(restartInterval);
+        console.log("Cleared restart interval");
       }
 
       // Stop the recorder - this triggers onstop which processes final chunk
@@ -432,7 +442,7 @@ export default function InterviewInterface({
         console.log("Stopping recorder for final chunk processing...");
         pushToTalkAudioRecorderRef.current.stop();
 
-        // Wait for final transcription to complete (reduced from 3s to 1s since we're blocking new ones)
+        // Wait for final transcription to complete
         console.log("Waiting for final transcription to process...");
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
@@ -596,6 +606,12 @@ export default function InterviewInterface({
         return;
       }
 
+      // Double-check we're not stopping before making the API call
+      if (isStoppingPushToTalkRef.current) {
+        console.log("Aborting transcription - stop was triggered during blob creation");
+        return;
+      }
+
       console.log(
         "Sending audio blob to transcription API, size:",
         audioBlob.size,
@@ -608,6 +624,7 @@ export default function InterviewInterface({
       const response = await fetch("/api/transcribe", {
         method: "POST",
         body: formData,
+        signal: transcriptionAbortControllerRef.current?.signal,
       });
 
       if (!response.ok) {
@@ -616,6 +633,13 @@ export default function InterviewInterface({
       }
 
       const { text, wasAutoCorrected, validation } = await response.json();
+      
+      // Check again after async operation - user may have stopped during transcription
+      if (isStoppingPushToTalkRef.current) {
+        console.log("Discarding transcription - stop was triggered during API call");
+        return;
+      }
+      
       console.log("Received transcription:", text);
 
       if (wasAutoCorrected) {
@@ -649,6 +673,11 @@ export default function InterviewInterface({
         console.log("Empty or whitespace-only transcription");
       }
     } catch (error) {
+      // Ignore abort errors - these are intentional
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log("Transcription request aborted (expected)");
+        return;
+      }
       console.error("Transcription error:", error);
     }
   };
@@ -747,6 +776,12 @@ export default function InterviewInterface({
       await stopPushToTalk();
     }
 
+    // Abort any remaining transcription requests
+    if (transcriptionAbortControllerRef.current) {
+      transcriptionAbortControllerRef.current.abort();
+      transcriptionAbortControllerRef.current = null;
+    }
+
     // Stop push-to-talk recorder
     if (pushToTalkAudioRecorderRef.current) {
       const restartInterval = (pushToTalkAudioRecorderRef.current as any)
@@ -754,7 +789,9 @@ export default function InterviewInterface({
       if (restartInterval) {
         clearInterval(restartInterval);
       }
-      pushToTalkAudioRecorderRef.current.stop();
+      if (pushToTalkAudioRecorderRef.current.state !== "inactive") {
+        pushToTalkAudioRecorderRef.current.stop();
+      }
       pushToTalkAudioRecorderRef.current = null;
     }
 
@@ -849,6 +886,13 @@ export default function InterviewInterface({
   useEffect(() => {
     return () => {
       stopMedia();
+      
+      // Abort any pending transcriptions
+      if (transcriptionAbortControllerRef.current) {
+        transcriptionAbortControllerRef.current.abort();
+        transcriptionAbortControllerRef.current = null;
+      }
+      
       if (pushToTalkAudioRecorderRef.current) {
         const restartInterval = (pushToTalkAudioRecorderRef.current as any)
           .restartInterval;
