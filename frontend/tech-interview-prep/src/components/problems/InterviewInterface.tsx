@@ -390,16 +390,10 @@ export default function InterviewInterface({
     console.log("Processing VAD audio, samples:", audio.length);
 
     try {
-      // Convert Float32Array to the format expected by transcription API
-      // VAD gives us Float32Array at 16kHz, we need to convert to Int16Array
-      const int16Audio = new Int16Array(audio.length);
-      for (let i = 0; i < audio.length; i++) {
-        const s = Math.max(-1, Math.min(1, audio[i]));
-        int16Audio[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
+      const wavBuffer = utils.encodeWAV(audio);
 
       // Create audio blob for transcription
-      const audioBlob = new Blob([int16Audio.buffer], { type: "audio/wav" });
+      const audioBlob = new Blob([wavBuffer], { type: "audio/wav" });
 
       // Skip very small audio (likely noise)
       if (audioBlob.size < 10000) {
@@ -940,8 +934,8 @@ export default function InterviewInterface({
                         {isVADActive && !isSpeaking && !isAiTyping && (
                           <div className="text-xs text-gray-500 text-center space-y-1">
                             <p>
-                              🎤 Just start speaking naturally - I'll detect
-                              when you're talking
+                              🎤 Just start speaking naturally - I`ll detect
+                              when you`re talking
                             </p>
                             {code && code.trim().length > 0 && (
                               <p className="text-blue-600 font-medium">
@@ -1175,7 +1169,7 @@ export default function InterviewInterface({
                   <div>
                     <h2 className="text-3xl font-bold">Interview Complete!</h2>
                     <p className="text-blue-100">
-                      Here's your performance feedback
+                      Here is your performance feedback
                     </p>
                   </div>
                 </div>
