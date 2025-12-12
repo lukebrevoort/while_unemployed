@@ -311,8 +311,8 @@ export default function InterviewInterface({
 
   // Push-to-talk: Start listening
   // Initialize VAD for automatic speech detection
-  const initializeVAD = async () => {
-    if (!isRecording || !isMicOn) {
+  const initializeVAD = async (recordingActive: boolean = isRecording) => {
+    if (!recordingActive) {
       console.log("Cannot initialize VAD: interview not started or mic off");
       return;
     }
@@ -323,7 +323,7 @@ export default function InterviewInterface({
     }
 
     console.log("Initializing VAD...");
-    
+
     try {
       const vad = await MicVAD.new({
         // Callbacks for speech detection
@@ -335,33 +335,33 @@ export default function InterviewInterface({
           currentAudioChunksRef.current = [];
           transcriptionAbortControllerRef.current = new AbortController();
         },
-        
+
         onSpeechEnd: async (audio: Float32Array) => {
           console.log("Speech ended - processing audio");
           setIsSpeaking(false);
-          
+
           // Prevent multiple simultaneous transcriptions
           if (isProcessingTranscriptionRef.current) {
             console.log("Already processing transcription, skipping");
             return;
           }
-          
+
           isProcessingTranscriptionRef.current = true;
-          
+
           try {
             await processVADAudio(audio);
           } finally {
             isProcessingTranscriptionRef.current = false;
           }
         },
-        
+
         // VAD configuration
-        positiveSpeechThreshold: 0.8,  // Higher = more confident speech detection
-        negativeSpeechThreshold: 0.8 - 0.15,  // When to stop detecting speech
-        redemptionMs: 800,  // Milliseconds to wait before ending speech
-        preSpeechPadMs: 100,  // Milliseconds to include before speech starts
-        minSpeechMs: 300,  // Minimum milliseconds for valid speech
-        
+        positiveSpeechThreshold: 0.8, // Higher = more confident speech detection
+        negativeSpeechThreshold: 0.8 - 0.15, // When to stop detecting speech
+        redemptionMs: 800, // Milliseconds to wait before ending speech
+        preSpeechPadMs: 100, // Milliseconds to include before speech starts
+        minSpeechMs: 300, // Minimum milliseconds for valid speech
+
         // Asset paths for ONNX model and worklet
         baseAssetPath: "/",
         onnxWASMBasePath: "/",
@@ -379,25 +379,25 @@ export default function InterviewInterface({
   // Process audio from VAD
   const processVADAudio = async (audio: Float32Array) => {
     console.log("Processing VAD audio, samples:", audio.length);
-    
+
     try {
       // Convert Float32Array to the format expected by transcription API
       // VAD gives us Float32Array at 16kHz, we need to convert to Int16Array
       const int16Audio = new Int16Array(audio.length);
       for (let i = 0; i < audio.length; i++) {
         const s = Math.max(-1, Math.min(1, audio[i]));
-        int16Audio[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        int16Audio[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
-      
+
       // Create audio blob for transcription
       const audioBlob = new Blob([int16Audio.buffer], { type: "audio/wav" });
-      
+
       // Skip very small audio (likely noise)
       if (audioBlob.size < 10000) {
         console.log("Audio too small, skipping transcription");
         return;
       }
-      
+
       console.log("Sending audio to transcription API, size:", audioBlob.size);
       const formData = new FormData();
       formData.append("audio", audioBlob, "audio.wav");
@@ -416,7 +416,7 @@ export default function InterviewInterface({
       }
 
       const { text, wasAutoCorrected, validation } = await response.json();
-      
+
       console.log("Received transcription:", text);
 
       if (text && text.trim().length > 0) {
@@ -446,7 +446,7 @@ export default function InterviewInterface({
         }, 300);
       }
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (error instanceof Error && error.name === "AbortError") {
         console.log("Transcription aborted (expected)");
         return;
       }
@@ -457,18 +457,18 @@ export default function InterviewInterface({
   // Stop VAD
   const stopVAD = async () => {
     console.log("Stopping VAD...");
-    
+
     if (transcriptionAbortControllerRef.current) {
       transcriptionAbortControllerRef.current.abort();
       transcriptionAbortControllerRef.current = null;
     }
-    
+
     if (vadInstanceRef.current) {
       vadInstanceRef.current.pause();
       vadInstanceRef.current.destroy();
       vadInstanceRef.current = null;
     }
-    
+
     setIsVADActive(false);
     setIsSpeaking(false);
     setCurrentTranscription("");
@@ -496,7 +496,9 @@ export default function InterviewInterface({
   // Transcribe audio chunk and send via WebSocket
   // Deprecated - transcription now handled by VAD
   const transcribeAudioChunk = async () => {
-    console.warn("transcribeAudioChunk is deprecated, VAD handles transcription now");
+    console.warn(
+      "transcribeAudioChunk is deprecated, VAD handles transcription now",
+    );
   };
 
   // Finalize the user message after 3 seconds of silence
@@ -580,8 +582,9 @@ export default function InterviewInterface({
       ]);
 
       // Initialize VAD for automatic speech detection
+      // Pass true explicitly since setIsRecording is async and won't have updated yet
       if (isMicOn) {
-        await initializeVAD();
+        await initializeVAD(true);
       }
     } catch (error) {
       console.error("Start interview error:", error);
@@ -693,20 +696,20 @@ export default function InterviewInterface({
   useEffect(() => {
     return () => {
       stopMedia();
-      
+
       // Cleanup VAD
       if (vadInstanceRef.current) {
         vadInstanceRef.current.pause();
         vadInstanceRef.current.destroy();
         vadInstanceRef.current = null;
       }
-      
+
       // Abort any pending transcriptions
       if (transcriptionAbortControllerRef.current) {
         transcriptionAbortControllerRef.current.abort();
         transcriptionAbortControllerRef.current = null;
       }
-      
+
       // Cleanup TTS audio
       if (audioRef.current) {
         audioRef.current.pause();
@@ -902,7 +905,8 @@ export default function InterviewInterface({
                     <div className="p-4 border-t border-gray-200 bg-white">
                       <div className="flex flex-col gap-3">
                         {/* VAD Status Indicator */}
-                        <div className={`w-full py-4 rounded-lg font-semibold text-white transition-all flex items-center justify-center gap-3 ${
+                        <div
+                          className={`w-full py-4 rounded-lg font-semibold text-white transition-all flex items-center justify-center gap-3 ${
                             isSpeaking
                               ? "bg-red-600 animate-pulse shadow-lg"
                               : isVADActive
@@ -927,7 +931,8 @@ export default function InterviewInterface({
                         {isVADActive && !isSpeaking && !isAiTyping && (
                           <div className="text-xs text-gray-500 text-center space-y-1">
                             <p>
-                              🎤 Just start speaking naturally - I'll detect when you're talking
+                              🎤 Just start speaking naturally - I'll detect
+                              when you're talking
                             </p>
                             {code && code.trim().length > 0 && (
                               <p className="text-blue-600 font-medium">
