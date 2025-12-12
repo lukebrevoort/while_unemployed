@@ -240,6 +240,12 @@ export default function InterviewInterface({
   // Start media stream
   const startMedia = async () => {
     try {
+      // Ensure at least one media type is requested
+      if (!isCameraOn && !isMicOn) {
+        console.log("No media requested - both camera and mic are off");
+        return null;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: isCameraOn,
         audio: isMicOn,
@@ -361,6 +367,9 @@ export default function InterviewInterface({
         redemptionMs: 800, // Milliseconds to wait before ending speech
         preSpeechPadMs: 100, // Milliseconds to include before speech starts
         minSpeechMs: 300, // Minimum milliseconds for valid speech
+
+        // Model selection - use v5 (newer, more accurate)
+        model: "v5",
 
         // Asset paths for ONNX model and worklet
         baseAssetPath: "/",
